@@ -108,7 +108,7 @@ private fun App(vm: AppViewModel, ar: ArController) {
                     val room = vm.room
                     val res = vm.result
                     if (room != null && res != null) PreviewScreen(ar, room, res.layout, vm.steps, vm.doneSteps, { vm.toggleStep(it) }, onBack = { vm.back() })
-                    else vm.back()
+                    else LaunchedEffect(Unit) { vm.back() }
                 }
             }
         }

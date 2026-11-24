@@ -2,7 +2,10 @@ package com.openroomai.app.ui
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -69,8 +72,8 @@ private fun heatBitmap(rep: OpennessReport): ImageBitmap {
         if (!g.inside[i] || g.blocked[i]) { px[i] = 0; continue }
         val d = g.dist[i]
         px[i] = when {
-            d < SQUEEZE_RADIUS -> 0x55FF5370
-            d < COMFORT_RADIUS -> 0x55FFC94D
+            d < SQUEEZE_RADIUS -> 0x26FF5370
+            d < COMFORT_RADIUS -> 0x30FFC94D
             else -> {
                 // Deeper green = more open.
                 val t = Geo.clamp01((d - COMFORT_RADIUS) / 1.2f)
@@ -122,6 +125,10 @@ fun PlanCanvas(
     val roomState by rememberUpdatedState(room)
     val pad = if (compact) 10f else 56f
 
+    val onSelectS by rememberUpdatedState(onSelect)
+    val onMoveS by rememberUpdatedState(onMove)
+    val onTapEmptyS by rememberUpdatedState(onTapEmpty)
+
     var gestureMod = Modifier as Modifier
     if (interactive) {
         gestureMod = Modifier
@@ -130,32 +137,28 @@ fun PlanCanvas(
                     val tr = PlanTransform(roomState, Size(size.width.toFloat(), size.height.toFloat()), pad)
                     val p = tr.toPlan(o)
                     val hit = layoutState.lastOrNull { OccupancyGrid.pointInConvex(p, it.corners()) }
-                    if (hit != null) onSelect(hit.id) else { onSelect(null); onTapEmpty(p) }
+                    if (hit != null) onSelectS(hit.id) else { onSelectS(null); onTapEmptyS(p) }
                 }
             }
             .pointerInput(Unit) {
-                var dragId: String? = null
-                var grabOffset = Vec2.ZERO
-                detectDragGestures(
-                    onDragStart = { o ->
-                        val tr = PlanTransform(roomState, Size(size.width.toFloat(), size.height.toFloat()), pad)
-                        val p = tr.toPlan(o)
-                        val hit = layoutState.lastOrNull { OccupancyGrid.pointInConvex(p, it.corners().map { c -> it.center + (c - it.center) * 1.15f }) }
-                        dragId = hit?.id
-                        grabOffset = if (hit != null) hit.center - p else Vec2.ZERO
-                        if (hit != null) onSelect(hit.id)
-                    },
-                    onDragEnd = { dragId = null },
-                    onDragCancel = { dragId = null },
-                    onDrag = { change, _ ->
-                        val id = dragId ?: return@detectDragGestures
+                // Only drags that start on a piece of furniture are ours; others scroll the page.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val tr = PlanTransform(roomState, Size(size.width.toFloat(), size.height.toFloat()), pad)
+                    val p0 = tr.toPlan(down.position)
+                    val hit = layoutState.lastOrNull { f ->
+                        OccupancyGrid.pointInConvex(p0, f.corners().map { c -> f.center + (c - f.center) * 1.15f })
+                    } ?: return@awaitEachGesture
+                    val grab = hit.center - p0
+                    val start = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() } ?: return@awaitEachGesture
+                    onSelectS(hit.id)
+                    drag(start.id) { change ->
                         change.consume()
-                        val tr = PlanTransform(roomState, Size(size.width.toFloat(), size.height.toFloat()), pad)
-                        val p = tr.toPlan(change.position) + grabOffset
+                        val p = tr.toPlan(change.position) + grab
                         // Snap to 5 cm so things line up nicely.
-                        onMove(id, Vec2((p.x * 20f).roundToInt() / 20f, (p.y * 20f).roundToInt() / 20f))
-                    },
-                )
+                        onMoveS(hit.id, Vec2((p.x * 20f).roundToInt() / 20f, (p.y * 20f).roundToInt() / 20f))
+                    }
+                }
             }
     }
 
@@ -232,7 +235,7 @@ fun drawPlan(
     walls.forEachIndexed { i, w ->
         drawLine(Palette.Wall, tr.toScreen(w.a), tr.toScreen(w.b), strokeWidth = if (compact) 3f else 7f, cap = StrokeCap.Round)
         if (!compact) {
-            val mid = w.pointAt(0.5f) - room.inwardNormal(i) * 0.28f
+            val mid = w.pointAt(0.5f) - room.inwardNormal(i) * (24f / s)
             val c = tr.toScreen(mid)
             drawCircle(Palette.Surface, 15f, c)
             drawCircle(Palette.Muted, 15f, c, style = Stroke(1.5f))

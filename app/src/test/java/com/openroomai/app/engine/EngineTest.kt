@@ -77,4 +77,19 @@ class EngineTest {
         println("bedroom: ${res.before.score} -> ${res.after.score}, violations=${res.violations}")
         assertTrue(res.after.score >= res.before.score)
     }
+
+    @Test
+    fun movePlansStayShortAcrossSeeds() {
+        val room = RoomRepository.demoRoom()
+        val scores = ArrayList<Int>()
+        for (seed in 1L..6L) {
+            val res = LayoutOptimizer(room, Effort.BALANCED, seed).optimize(room.furniture)
+            val steps = MovePlanner.plan(room, room.furniture, res.layout)
+            scores += res.after.score
+            assertTrue("seed $seed: ${steps.size} steps", steps.size <= room.furniture.size * 2)
+            assertTrue(res.violations.toString(), res.fits)
+        }
+        println("seed scores: $scores")
+        assertTrue(scores.min() >= 65)
+    }
 }

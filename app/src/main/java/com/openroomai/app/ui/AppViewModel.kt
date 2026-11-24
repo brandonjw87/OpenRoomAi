@@ -121,7 +121,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun addOpening(o: Opening) = update { r -> r.copy(openings = r.openings + o) }
     fun removeOpening(id: String) = update { r -> r.copy(openings = r.openings.filterNot { it.id == id }) }
 
-    private fun persist(r: Room) = viewModelScope.launch(Dispatchers.IO) { repo.save(r) }
+    private var saveJob: Job? = null
+
+    /** Debounced: dragging a sofa shouldn't rewrite the file 60 times a second. */
+    private fun persist(r: Room) {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch(Dispatchers.IO) { delay(400); repo.save(r) }
+    }
 
     private fun reanalyze(immediate: Boolean = false) {
         val r = room ?: return

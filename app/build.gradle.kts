@@ -63,7 +63,7 @@ dependencies {
 
 // Robolectric's own downloader bypasses Gradle (and proxies); let Gradle fetch the Android runtime instead.
 val robolectricRuntime by configurations.creating
-dependencies { robolectricRuntime("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7") }
+dependencies { robolectricRuntime("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7") }
 val robolectricDir = layout.buildDirectory.dir("robolectric-jars")
 val fetchRobolectric by tasks.registering(Copy::class) {
     from(robolectricRuntime)

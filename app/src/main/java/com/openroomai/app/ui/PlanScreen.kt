@@ -80,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -149,7 +150,12 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                 val aspect = (b.width / b.height).coerceIn(0.6f, 1.6f)
                 Box(
                     Modifier.fillMaxWidth().aspectRatio(aspect).heightIn(max = 520.dp).clip(RoundedCornerShape(24.dp)).background(Palette.Surface)
-                        .drawWithContent { layer.record { this@drawWithContent.drawContent() }; drawLayer(layer) },
+                        .drawWithContent {
+                            // Record into a layer so "Share" can grab the plan as an image; software canvases can't host layers.
+                            if (drawContext.canvas.nativeCanvas.isHardwareAccelerated) {
+                                layer.record { this@drawWithContent.drawContent() }; drawLayer(layer)
+                            } else drawContent()
+                        },
                 ) {
                     PlanCanvas(
                         room = room,

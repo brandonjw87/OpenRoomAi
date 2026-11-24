@@ -104,6 +104,7 @@ class ArController : GLSurfaceView.Renderer {
     private var reticle: Vec2? = null
     private var frameNo = 0L
     private var depthOn = false
+    @Volatile private var geometryDirty = true
 
     // Preview model.
     private var previewRoom: Room? = null
@@ -142,6 +143,7 @@ class ArController : GLSurfaceView.Renderer {
                 s.configure(cfg)
                 session = s
                 sessionToken = UUID.randomUUID().toString()
+                geometryDirty = true
                 _state.value = _state.value.copy(depthSupported = depthOn)
             } catch (e: UnavailableException) {
                 return "AR isn't available on this device (${e.javaClass.simpleName}). Use manual sketch instead."
@@ -329,7 +331,7 @@ class ArController : GLSurfaceView.Renderer {
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         viewW = width; viewH = height
         GLES20.glViewport(0, 0, width, height)
-        session?.setDisplayGeometry(displayRotation(), width, height)
+        geometryDirty = true
     }
 
     @Suppress("DEPRECATION")
@@ -342,6 +344,7 @@ class ArController : GLSurfaceView.Renderer {
     override fun onDrawFrame(gl: GL10?) {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         val s = session ?: return
+        if (geometryDirty && viewW > 1) { s.setDisplayGeometry(displayRotation(), viewW, viewH); geometryDirty = false }
         try {
             s.setCameraTextureName(background.textureId)
             val frame = s.update()

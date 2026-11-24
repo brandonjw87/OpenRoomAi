@@ -1,9 +1,11 @@
 package com.openroomai.app.ui
 
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -55,5 +57,8 @@ private val type = Typography(
 
 @Composable
 fun OpenRoomTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = scheme, typography = type, content = content)
+    MaterialTheme(colorScheme = scheme, typography = type) {
+        // Plain Text outside a Surface would otherwise default to black-on-black.
+        CompositionLocalProvider(LocalContentColor provides Palette.Text, content = content)
+    }
 }

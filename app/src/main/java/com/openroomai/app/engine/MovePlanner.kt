@@ -36,29 +36,35 @@ object MovePlanner {
         val newcomers = after.filter { a -> before.none { it.id == a.id } }
 
         val steps = ArrayList<MoveStep>()
-        var guard = 0
-        while (pending.isNotEmpty() && guard++ < 100) {
+        val parked = HashSet<String>()
+        // Only pieces that still have to move can be "in the way": the final layout is valid,
+        // so overlaps with pieces that stay put are just touching edges.
+        fun blocks(o: Furniture, target: Furniture): Boolean =
+            o.id != target.id && o.id in pending && Geo.convexOverlap(shrink(o), shrink(target))
+        while (pending.isNotEmpty()) {
             val ready = pending.firstOrNull { id ->
                 val target = afterById[id]!!
-                current.values.none { o -> o.id != id && Geo.convexOverlap(o.corners(), target.corners()) }
+                current.values.none { o -> blocks(o, target) }
             }
-            if (ready != null) {
-                val from = current[ready]!!
-                val to = afterById[ready]!!
-                steps += describe(room, steps.size + 1, from, to, false)
-                current[ready] = to
-                pending.remove(ready)
-            } else {
-                // Deadlock: park the piece blocking the most targets in the clear middle of the room.
-                val blockerId = pending.maxByOrNull { id ->
-                    val f = current[id]!!
-                    pending.count { other -> other != id && Geo.convexOverlap(f.corners(), afterById[other]!!.corners()) }
-                }!!
-                val from = current[blockerId]!!
-                val park = parkingSpot(room, from, current.values.filter { it.id != blockerId } + pending.filter { it != blockerId }.map { afterById[it]!! })
+            // Deadlock: park one blocker (each at most once); if all are parked already, just go.
+            val blocker = if (ready == null) pending.filter { it !in parked }.maxByOrNull { id ->
+                val f = current[id]!!
+                pending.count { other -> other != id && Geo.convexOverlap(shrink(f), shrink(afterById[other]!!)) }
+            } else null
+            if (ready == null && blocker != null) {
+                parked += blocker
+                val from = current[blocker]!!
+                val park = parkingSpot(room, from, current.values.filter { it.id != blocker } + pending.filter { it != blocker }.map { afterById[it]!! })
                 steps += describe(room, steps.size + 1, from, park, true)
-                current[blockerId] = park
+                current[blocker] = park
+                continue
             }
+            val id = ready ?: pending.first()
+            val from = current[id]!!
+            val to = afterById[id]!!
+            steps += describe(room, steps.size + 1, from, to, false)
+            current[id] = to
+            pending.remove(id)
         }
         for (n in newcomers) {
             val anchor = nearestWall(room, n.center)
@@ -72,6 +78,9 @@ object MovePlanner {
         }
         return steps
     }
+
+    /** Footprint shrunk by 3 cm per side so flush neighbours don't count as collisions. */
+    private fun shrink(f: Furniture) = Geo.rectCorners(f.center, (f.width - 0.06f).coerceAtLeast(0.05f), (f.depth - 0.06f).coerceAtLeast(0.05f), f.angleRad)
 
     private fun parkingSpot(room: Room, f: Furniture, obstacles: List<Furniture>): Furniture {
         val g = OccupancyGrid(room, 0.1f)

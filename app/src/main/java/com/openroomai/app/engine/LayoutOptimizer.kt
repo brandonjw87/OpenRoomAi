@@ -49,6 +49,7 @@ class LayoutOptimizer(
         listOf(s.a, s.b, s.b + n * 0.5f, s.a + n * 0.5f)
     }
     private val grid = OccupancyGrid(room, 0.1f)
+    private val fineGrid by lazy { OccupancyGrid(room, 0.05f) }
 
     /**
      * @param start layout to begin from (may include brand-new pieces).
@@ -62,32 +63,39 @@ class LayoutOptimizer(
         val before = OpennessAnalyzer.analyze(room, reference, OccupancyGrid(room, 0.05f), withFlows = true)
         if (start.isEmpty()) return OptimizeResult(start, before, before, emptyList())
 
-        val seeds = listOf(start, wallSeed(start))
+        // Several short exploratory runs from different starts (fast 10 cm grid), each refined cold.
+        // Candidates are then judged on the same fine 5 cm grid the final report uses, so a gap
+        // that only "exists" at coarse resolution can't win.
+        val seeds = listOf(start, wallSeed(start), wallSeed(start), wallSeed(start))
+        val explore = (effort.iterations * 0.55f).toInt()
+        val candidates = ArrayList<List<Furniture>>()
+        seeds.forEachIndexed { si, seedLayout ->
+            val (layout, _) = anneal(reference, seedLayout, explore, 2.0f) { p -> onProgress((si + p * 0.8f) / seeds.size) }
+            val (refined, _) = anneal(reference, layout, effort.iterations / 5, 0.2f) { p -> onProgress((si + 0.8f + p * 0.2f) / seeds.size) }
+            candidates += refined
+        }
+        candidates += start
         var bestLayout = start
         var bestCost = Float.MAX_VALUE
-        seeds.forEachIndexed { si, seedLayout ->
-            val (layout, cost) = anneal(reference, seedLayout) { p -> onProgress((si + p) / seeds.size) }
-            if (cost < bestCost) { bestCost = cost; bestLayout = layout }
+        for (c in candidates) {
+            val fine = totalCost(reference, c, fineGrid)
+            if (fine < bestCost) { bestCost = fine; bestLayout = c }
         }
-        // Never recommend something worse than doing nothing.
-        if (totalCost(reference, start) <= bestCost) bestLayout = start
 
         val polished = bestLayout.map { snapTidy(it, bestLayout) }
-        val finalLayout = if (totalCost(reference, polished) <= totalCost(reference, bestLayout)) polished else bestLayout
+        val finalLayout = if (totalCost(reference, polished, fineGrid) <= bestCost) polished else bestLayout
         val after = OpennessAnalyzer.analyze(room, finalLayout, OccupancyGrid(room, 0.05f), withFlows = true)
         onProgress(1f)
         return OptimizeResult(finalLayout, before, after, violations(finalLayout))
     }
 
-    private fun anneal(original: List<Furniture>, start: List<Furniture>, progress: (Float) -> Unit): Pair<List<Furniture>, Float> {
+    private fun anneal(original: List<Furniture>, start: List<Furniture>, iters: Int, t0: Float, progress: (Float) -> Unit): Pair<List<Furniture>, Float> {
         val cur = start.toMutableList()
         var curCost = totalCost(original, cur)
         var best = cur.toList()
         var bestCost = curCost
         val movable = cur.indices.filter { !cur[it].locked }
         if (movable.isEmpty()) return best to bestCost
-        val iters = effort.iterations
-        val t0 = 2.0f
         val t1 = 0.005f
         for (it in 0 until iters) {
             val frac = it.toFloat() / iters
@@ -163,7 +171,7 @@ class LayoutOptimizer(
 
     // ------------------------------------------------------------------ cost
 
-    fun totalCost(original: List<Furniture>, layout: List<Furniture>): Float {
+    fun totalCost(original: List<Furniture>, layout: List<Furniture>, g: OccupancyGrid = grid): Float {
         var hard = 0f
         var soft = 0f
         for ((i, f) in layout.withIndex()) {
@@ -194,9 +202,11 @@ class LayoutOptimizer(
                 if (moved > 0.05f || rotated > 0.05f) soft += effort.movePenalty * (0.3f + moved + 0.3f * rotated) * sizeFactor(f)
             }
         }
-        val rep = OpennessAnalyzer.analyze(room, layout, grid, withFlows = false)
+        val rep = OpennessAnalyzer.analyze(room, layout, g, withFlows = false)
         val open = rep.score / 100f
-        return hard * 10f + soft - open * 6f
+        // Furniture you can't walk up to is useless, however open the room looks.
+        val unreachable = (1f - rep.accessPct) * layout.size
+        return hard * 10f + soft + unreachable * 2.5f - open * 10f
     }
 
     private fun sizeFactor(f: Furniture) = (0.6f + f.footprint()).coerceAtMost(2.5f)
