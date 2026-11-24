@@ -1,0 +1,5 @@
+-keep class com.google.ar.** { *; }
+-keepattributes *Annotation*, InnerClasses
+-keep,includedescriptorclasses class com.openroomai.app.**$$serializer { *; }
+-keepclassmembers class com.openroomai.app.** { *** Companion; }
+-keepclasseswithmembers class com.openroomai.app.** { kotlinx.serialization.KSerializer serializer(...); }
