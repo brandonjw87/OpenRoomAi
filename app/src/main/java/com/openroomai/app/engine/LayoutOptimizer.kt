@@ -38,6 +38,7 @@ class LayoutOptimizer(
     private val room: Room,
     private val effort: Effort = Effort.BALANCED,
     seed: Long = 42L,
+    private val goal: LayoutGoal = LayoutGoal.EVERYDAY,
 ) {
     private val rnd = Random(seed)
     private val walls = room.walls()
@@ -60,7 +61,7 @@ class LayoutOptimizer(
         reference: List<Furniture> = start,
         onProgress: (Float) -> Unit = {},
     ): OptimizeResult {
-        val before = OpennessAnalyzer.analyze(room, reference, OccupancyGrid(room, 0.05f), withFlows = true)
+        val before = OpennessAnalyzer.analyze(room, reference, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
         if (start.isEmpty()) return OptimizeResult(start, before, before, emptyList())
 
         // Several short exploratory runs from different starts (fast 10 cm grid), each refined cold.
@@ -84,7 +85,7 @@ class LayoutOptimizer(
 
         val polished = bestLayout.map { snapTidy(it, bestLayout) }
         val finalLayout = if (totalCost(reference, polished, fineGrid) <= bestCost) polished else bestLayout
-        val after = OpennessAnalyzer.analyze(room, finalLayout, OccupancyGrid(room, 0.05f), withFlows = true)
+        val after = OpennessAnalyzer.analyze(room, finalLayout, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
         onProgress(1f)
         return OptimizeResult(finalLayout, before, after, violations(finalLayout))
     }
@@ -192,8 +193,9 @@ class LayoutOptimizer(
                 }
             }
             // Backs to walls.
-            if (f.type.wallAffinity > 0f) soft += f.type.wallAffinity * wallMisfit(f) * 0.9f
-            soft += relationCost(f, layout)
+            val affinity = if (goal == LayoutGoal.PARTY) max(f.type.wallAffinity, 0.6f) else f.type.wallAffinity
+            if (affinity > 0f) soft += affinity * wallMisfit(f) * 0.9f
+            soft += relationCost(f, layout) * goal.relationScale + goalCost(f, layout)
             // Sweat: how far it moved from where it sits today.
             val o = original.firstOrNull { it.id == f.id }
             if (o != null) {
@@ -202,11 +204,51 @@ class LayoutOptimizer(
                 if (moved > 0.05f || rotated > 0.05f) soft += effort.movePenalty * (0.3f + moved + 0.3f * rotated) * sizeFactor(f)
             }
         }
-        val rep = OpennessAnalyzer.analyze(room, layout, g, withFlows = false)
+        val rep = OpennessAnalyzer.analyze(room, layout, g, withFlows = false, walkRadius = goal.walkRadius)
         val open = rep.score / 100f
         // Furniture you can't walk up to is useless, however open the room looks.
         val unreachable = (1f - rep.accessPct) * layout.size
-        return hard * 10f + soft + unreachable * 2.5f - open * 10f
+        var goalOpen = goal.clearBonus * rep.clearDiameter
+        if (goal == LayoutGoal.ACCESSIBLE) goalOpen -= 6f * max(0f, TURNING_DIAMETER - rep.clearDiameter)
+        return hard * 10f + soft + unreachable * 2.5f - open * goal.openWeight - goalOpen
+    }
+
+    /** Extra wishes that only matter for some goals. */
+    private fun goalCost(f: Furniture, layout: List<Furniture>): Float {
+        var c = 0f
+        when (goal) {
+            LayoutGoal.MOVIE_NIGHT -> when (f.type) {
+                FurnitureType.TV_STAND -> for (w in room.windows()) {
+                    // Glare: screen facing a window, or a bright window right behind the screen.
+                    val mid = room.openingSegment(w).pointAt(0.5f)
+                    val toWin = (mid - f.center).normalized()
+                    val align = kotlin.math.abs(f.front() dot toWin)
+                    if (align > 0.6f) c += 1.2f * (align - 0.6f) / 0.4f * (3f / (1f + mid.dist(f.center)))
+                }
+                FurnitureType.ARMCHAIR -> {
+                    val tv = layout.filter { it.type == FurnitureType.TV_STAND }.minByOrNull { it.center.dist(f.center) }
+                    if (tv != null) {
+                        val d = tv.center.dist(f.center)
+                        c += 0.5f * (max(0f, 1.8f - d) + max(0f, d - 3.4f))
+                        c += 0.8f * (1f - (f.front() dot (tv.center - f.center).normalized()))
+                    }
+                }
+                else -> {}
+            }
+            LayoutGoal.WORK_FROM_HOME -> if (f.type == FurnitureType.DESK) {
+                val w = room.windows().minByOrNull { room.openingSegment(it).distanceTo(f.center) }
+                if (w != null) {
+                    val d = room.openingSegment(w).distanceTo(f.center)
+                    c += 0.9f * max(0f, d - 1.0f)
+                    // Daylight from the side: no glare on screen, no squinting into the window.
+                    c += 0.8f * kotlin.math.abs(f.front() dot room.inwardNormal(w.wallIndex))
+                }
+                // Out of the doorway traffic.
+                room.doors().forEach { d -> if (room.openingSegment(d).distanceTo(f.center) < 1.4f) c += 0.6f }
+            }
+            else -> {}
+        }
+        return c
     }
 
     private fun sizeFactor(f: Furniture) = (0.6f + f.footprint()).coerceAtMost(2.5f)

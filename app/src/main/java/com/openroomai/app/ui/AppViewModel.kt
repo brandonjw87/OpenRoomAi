@@ -7,7 +7,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.openroomai.app.data.RoomRepository
+import com.openroomai.app.engine.DeclutterAction
+import com.openroomai.app.engine.DeclutterCoach
+import com.openroomai.app.engine.DeclutterIdea
 import com.openroomai.app.engine.Effort
+import com.openroomai.app.engine.LayoutGoal
 import com.openroomai.app.engine.Insight
 import com.openroomai.app.engine.Insights
 import com.openroomai.app.engine.LayoutOptimizer
@@ -33,6 +37,7 @@ sealed interface Screen {
     data object Scan : Screen
     data object Plan : Screen
     data object Preview : Screen
+    data object ThreeD : Screen
 }
 
 data class FitCheck(val item: Furniture, val result: OptimizeResult, val steps: List<MoveStep>)
@@ -66,6 +71,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var fitProgress by mutableStateOf<Float?>(null)
         private set
     var toast by mutableStateOf<String?>(null)
+    var declutter by mutableStateOf<List<DeclutterIdea>>(emptyList())
+        private set
+    private var declutterJob: Job? = null
 
     private var analyzeJob: Job? = null
 
@@ -77,7 +85,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun back(): Boolean = when (screen) {
         Screen.Home -> false
-        Screen.Preview -> { screen = Screen.Plan; true }
+        Screen.Preview, Screen.ThreeD -> { screen = Screen.Plan; true }
         else -> { screen = Screen.Home; refresh(); true }
     }
 
@@ -85,7 +93,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun open(r: Room) {
         room = r
-        result = null; steps = emptyList(); insights = emptyList(); doneSteps = emptySet(); fitCheck = null
+        result = null; steps = emptyList(); insights = emptyList(); doneSteps = emptySet(); fitCheck = null; declutter = emptyList()
         reanalyze(immediate = true)
         // Restore a previously computed plan.
         r.optimized?.let { opt -> restorePlan(r, opt) }
@@ -134,8 +142,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         analyzeJob?.cancel()
         analyzeJob = viewModelScope.launch {
             if (!immediate) delay(120)
-            val rep = withContext(Dispatchers.Default) { OpennessAnalyzer.analyze(r, r.furniture, 0.05f) }
+            val rep = withContext(Dispatchers.Default) { OpennessAnalyzer.analyze(r, r.furniture, 0.05f, walkRadius = r.goal.walkRadius) }
             report = rep
+            if (result == null) refreshDeclutter(r, r.furniture)
         }
     }
 
@@ -147,7 +156,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         progress = 0f
         viewModelScope.launch {
             val res = withContext(Dispatchers.Default) {
-                LayoutOptimizer(r, effort, seed = System.nanoTime()).optimize(r.furniture) { p -> progress = p }
+                LayoutOptimizer(r, effort, seed = System.nanoTime(), goal = r.goal).optimize(r.furniture) { p -> progress = p }
             }
             applyResult(r, res)
             progress = null
@@ -167,13 +176,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         steps = MovePlanner.plan(r, r.furniture, res.layout)
         insights = Insights.explain(r, res.before, res.after, res.layout)
         doneSteps = emptySet()
+        refreshDeclutter(r, res.layout)
+    }
+
+    private fun refreshDeclutter(r: Room, layout: List<Furniture>) {
+        declutterJob?.cancel()
+        declutterJob = viewModelScope.launch {
+            declutter = withContext(Dispatchers.Default) { DeclutterCoach.suggest(r, layout, r.goal) }
+        }
+    }
+
+    /** Declutter coach: apply a suggestion to the real room and re-plan. */
+    fun applyIdea(idea: DeclutterIdea) {
+        val r = room ?: return
+        val f = r.furniture.firstOrNull { it.id == idea.furnitureId } ?: return
+        val changed = DeclutterCoach.apply(f, idea.action)
+        update { room -> room.copy(furniture = room.furniture.mapNotNull { if (it.id == f.id) changed else it }) }
+        toast = when (idea.action) {
+            DeclutterAction.Remove -> "Bye-bye ${f.name} 👋 Re-planning…"
+            else -> "Done. Re-planning around the slimmer ${f.name.lowercase()}…"
+        }
+        optimize()
+    }
+
+    fun setGoal(g: LayoutGoal) {
+        if (room?.goal == g) return
+        update { it.copy(goal = g) }
     }
 
     private fun restorePlan(r: Room, opt: List<Furniture>) = viewModelScope.launch {
         val res = withContext(Dispatchers.Default) {
-            val opz = LayoutOptimizer(r, effort)
-            val before = OpennessAnalyzer.analyze(r, r.furniture, 0.05f)
-            val after = OpennessAnalyzer.analyze(r, opt, 0.05f)
+            val opz = LayoutOptimizer(r, effort, goal = r.goal)
+            val before = OpennessAnalyzer.analyze(r, r.furniture, 0.05f, walkRadius = r.goal.walkRadius)
+            val after = OpennessAnalyzer.analyze(r, opt, 0.05f, walkRadius = r.goal.walkRadius)
             OptimizeResult(opt, before, after, opz.violations(opt))
         }
         applyResult(r, res)
@@ -198,7 +233,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val placed = item.copy(center = Geo.centroid(r.outline), isNew = true)
             val res = withContext(Dispatchers.Default) {
-                LayoutOptimizer(r, Effort.BALANCED, seed = System.nanoTime())
+                LayoutOptimizer(r, Effort.BALANCED, seed = System.nanoTime(), goal = r.goal)
                     .optimize(start = r.furniture + placed, reference = r.furniture) { p -> fitProgress = p }
             }
             val st = MovePlanner.plan(r, r.furniture, res.layout)

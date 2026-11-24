@@ -13,7 +13,8 @@ import kotlin.math.sin
 
 /** Person-sized clearance radii (meters, measured from walkway center to the nearest obstacle). */
 const val SQUEEZE_RADIUS = 0.3f   // 60 cm: you can pass sideways
-const val COMFORT_RADIUS = 0.45f  // 90 cm: a comfortable walkway
+const val COMFORT_RADIUS = 0.45f  // 90 cm: a comfortable walkway (and wheelchair minimum)
+const val TURNING_DIAMETER = 1.5f // wheelchair turning circle
 
 data class FlowPath(val target: Furniture, val points: List<Vec2>, val minWidth: Float)
 
@@ -33,7 +34,11 @@ data class OpennessReport(
     /** Heatmap: per-cell distance to obstacles (m), with geometry to draw it. */
     val grid: OccupancyGrid,
     val visible: BooleanArray,
+    /** Clearance radius used for "walkable" (0.3 normally, 0.45 for wheelchair goal). */
+    val walkRadius: Float = SQUEEZE_RADIUS,
 ) {
+    val turningCircleOk get() = clearDiameter >= TURNING_DIAMETER
+
     val label: String
         get() = when {
             score >= 85 -> "Airy ✨"
@@ -51,12 +56,12 @@ data class OpennessReport(
  */
 object OpennessAnalyzer {
 
-    fun analyze(room: Room, layout: List<Furniture>, cell: Float = 0.1f, withFlows: Boolean = true): OpennessReport {
+    fun analyze(room: Room, layout: List<Furniture>, cell: Float = 0.1f, withFlows: Boolean = true, walkRadius: Float = SQUEEZE_RADIUS): OpennessReport {
         val g = OccupancyGrid(room, cell)
-        return analyze(room, layout, g, withFlows)
+        return analyze(room, layout, g, withFlows, walkRadius)
     }
 
-    fun analyze(room: Room, layout: List<Furniture>, g: OccupancyGrid, withFlows: Boolean): OpennessReport {
+    fun analyze(room: Room, layout: List<Furniture>, g: OccupancyGrid, withFlows: Boolean, walkRadius: Float = SQUEEZE_RADIUS): OpennessReport {
         g.stamp(layout)
         val n = g.size
 
@@ -75,7 +80,7 @@ object OpennessAnalyzer {
 
         // 2) Walkable floor reachable from the entry without squeezing.
         val entry = room.entryPoint()
-        val start = nearestWalkable(g, entry, SQUEEZE_RADIUS)
+        val start = nearestWalkable(g, entry, walkRadius)
         val parent = IntArray(n) { -2 }
         var reachable = 0
         if (start >= 0) {
@@ -90,13 +95,13 @@ object OpennessAnalyzer {
                     val nx = cx + DX[k]; val ny = cy + DY[k]
                     if (!g.inGrid(nx, ny)) continue
                     val ni = ny * g.w + nx
-                    if (parent[ni] != -2 || g.dist[ni] < SQUEEZE_RADIUS) continue
+                    if (parent[ni] != -2 || g.dist[ni] < walkRadius) continue
                     parent[ni] = c
                     q[qt++] = ni
                 }
             }
         }
-        val reachablePct = min(1f, reachable.toFloat() / g.emptyWalkable)
+        val reachablePct = min(1f, reachable.toFloat() / g.emptyWalkable(walkRadius))
 
         // 3) Can you get to the usable side of every piece?
         val flows = ArrayList<FlowPath>()
@@ -105,7 +110,7 @@ object OpennessAnalyzer {
         val tight = LinkedHashSet<Int>()
         for (f in layout) {
             if (!f.type.needsAccess) { accessible++; continue }
-            val target = f.accessPoints().map { nearestReached(g, it, parent, 0.6f) }.firstOrNull { it >= 0 } ?: -1
+            val target = f.accessPoints().map { nearestReached(g, it, parent, walkRadius + 0.3f) }.firstOrNull { it >= 0 } ?: -1
             if (target >= 0) {
                 accessible++
                 if (withFlows) {
@@ -185,7 +190,7 @@ object OpennessAnalyzer {
         val tightPts = tight.take(60).map { g.center(it % g.w, it / g.w) }
         return OpennessReport(
             score, clearDiameter, clearCenter, reachablePct, visibilityPct, lightPct, accessPct,
-            footprintPct, flows, tightPts, blockedPieces, windowBlockers.toList(), g, visible,
+            footprintPct, flows, tightPts, blockedPieces, windowBlockers.toList(), g, visible, walkRadius,
         )
     }
 

@@ -92,4 +92,36 @@ class EngineTest {
         println("seed scores: $scores")
         assertTrue(scores.min() >= 65)
     }
+
+    @Test
+    fun goalsShapeTheLayout() {
+        val room = RoomRepository.demoRoom()
+        for (g in LayoutGoal.entries) {
+            val res = LayoutOptimizer(room, Effort.BALANCED, 7L, g).optimize(room.furniture)
+            println("goal ${g.name}: ${res.before.score} -> ${res.after.score} clear=${"%.2f".format(res.after.clearDiameter)} fits=${res.fits}")
+            assertTrue("${g.name} ${res.violations}", res.fits)
+            assertTrue(g.name, res.after.score >= res.before.score)
+        }
+        val party = LayoutOptimizer(room, Effort.BALANCED, 7L, LayoutGoal.PARTY).optimize(room.furniture)
+        assertTrue("party clear ${party.after.clearDiameter}", party.after.clearDiameter >= 2.0f)
+        val wheel = LayoutOptimizer(room, Effort.BALANCED, 7L, LayoutGoal.ACCESSIBLE).optimize(room.furniture)
+        assertEquals(COMFORT_RADIUS, wheel.after.walkRadius, 1e-6f)
+        assertTrue("turning circle ${wheel.after.clearDiameter}", wheel.after.turningCircleOk)
+    }
+
+    @Test
+    fun declutterCoachRanksRealGains() {
+        val room = RoomRepository.demoRoom()
+        val ideas = DeclutterCoach.suggest(room, room.furniture)
+        ideas.forEach { println("declutter +${it.gain}: ${it.title} (${it.name})") }
+        assertTrue(ideas.isNotEmpty())
+        assertTrue(ideas.zipWithNext().all { (a, b) -> a.gain >= b.gain })
+        assertEquals(ideas.size, ideas.map { it.furnitureId }.distinct().size)
+        // Applying the top idea really does raise the score by at least the promised gain.
+        val top = ideas.first()
+        val changed = room.furniture.mapNotNull { if (it.id == top.furnitureId) DeclutterCoach.apply(it, top.action) else it }
+        val before = OpennessAnalyzer.analyze(room, room.furniture, 0.05f).score
+        val after = OpennessAnalyzer.analyze(room, changed, 0.05f).score
+        assertEquals(top.gain, after - before)
+    }
 }

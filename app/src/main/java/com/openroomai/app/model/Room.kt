@@ -1,5 +1,6 @@
 package com.openroomai.app.model
 
+import com.openroomai.app.engine.LayoutGoal
 import kotlinx.serialization.Serializable
 import java.util.UUID
 import kotlin.math.PI
@@ -143,6 +144,8 @@ data class Room(
     val scannedInAr: Boolean = false,
     /** Identifies the AR session the coordinates came from; a different session needs re-alignment. */
     val arSessionToken: String = "",
+    /** What the room is optimized for (movie night, work from home, …). */
+    val goal: LayoutGoal = LayoutGoal.EVERYDAY,
 ) {
     val area get() = Geo.absArea(outline)
     fun walls(): List<Segment> = Geo.edges(outline)

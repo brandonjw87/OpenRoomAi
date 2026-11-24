@@ -25,6 +25,18 @@ and a step-by-step plan for rearranging it so the room **feels as open as possib
 - **Will it fit?** – enter a product's size before buying; the whole room is re-planned around
   it and you get a verdict, the openness cost, and what else has to move.
 
+## v1.1: 3 more big features
+- **3D walkthrough**: orbit a dollhouse model of your room, or step into first person:
+  "From the door" (your first impression) and "From your sofa/bed". Toggle Now ↔ Optimized
+  and watch the furniture glide into place. Software renderer with near-plane clipping,
+  painter's sort and per-type low-poly furniture (sofas with arms, tables on legs, TV on stand…).
+- **Lifestyle goals**: Everyday, 🍿 Movie night (seats face the screen at 1.8–3.4 m, no window
+  glare), 💻 Work from home (side-lit desk out of the doorway traffic), 🎉 Party mode (everything
+  to the walls, max dance floor), ♿ Wheelchair friendly (90 cm paths + 1.5 m turning circle).
+- **Declutter coach**: re-scores the room for every "remove / go compact / swap tall for low"
+  option and ranks them by real openness gain (+N), with one-tap Apply & re-plan.
+  It will never tell you to throw out your bed.
+
 Also: sketch mode for phones without ARCore, demo room, lock pieces in place, 3 effort levels
 (Quick tidy / Balanced / Full redesign), before→after morph animation, progress checklist, and
 share the plan as an image + text checklist.

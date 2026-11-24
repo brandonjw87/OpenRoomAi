@@ -7,6 +7,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +51,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -85,7 +88,9 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.openroomai.app.engine.DeclutterIdea
 import com.openroomai.app.engine.Effort
+import com.openroomai.app.engine.LayoutGoal
 import com.openroomai.app.engine.MovePlanner
 import com.openroomai.app.engine.OpennessReport
 import com.openroomai.app.model.Furniture
@@ -102,7 +107,7 @@ private enum class EditTool { SELECT, DOOR, WINDOW }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPreview: () -> Unit) {
+fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPreview: () -> Unit, onOpen3D: () -> Unit = {}) {
     val room = vm.room ?: return
     val result = vm.result
     var showAfter by remember(room.id) { mutableStateOf(false) }
@@ -141,9 +146,15 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
 
         item {
             Column(Modifier.padding(horizontal = 16.dp)) {
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    SegmentedButton(selected = !after, onClick = { showAfter = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Now") }
-                    SegmentedButton(selected = after, enabled = result != null, onClick = { showAfter = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Optimized ✨") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
+                        SegmentedButton(selected = !after, onClick = { showAfter = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Now") }
+                        SegmentedButton(selected = after, enabled = result != null, onClick = { showAfter = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Optimized ✨") }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    FilledTonalButton(onClick = onOpen3D, contentPadding = PaddingValues(horizontal = 14.dp)) {
+                        Icon(Icons.Default.ViewInAr, null); Spacer(Modifier.width(4.dp)); Text("3D")
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 val b = Geo.bounds(room.outline)
@@ -222,6 +233,17 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
         item {
             Card(Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Palette.Surface), shape = RoundedCornerShape(20.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("What's this room for?", style = MaterialTheme.typography.titleMedium)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LayoutGoal.entries.forEach { g ->
+                            FilterChip(
+                                selected = room.goal == g, onClick = { vm.setGoal(g) },
+                                label = { Text("${g.emoji} ${g.label}") },
+                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Palette.Violet.copy(alpha = 0.3f), selectedLabelColor = Color.White),
+                            )
+                        }
+                    }
+                    Text(room.goal.blurb, color = Palette.Muted)
                     Text("How much heavy lifting?", style = MaterialTheme.typography.titleMedium)
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                         Effort.entries.forEachIndexed { i, e ->
@@ -309,7 +331,16 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                 }
             }
         } else if (vm.report != null) {
-            item { CurrentDiagnosis(vm.report!!) }
+            item { CurrentDiagnosis(vm.report!!, room.goal) }
+        }
+        if (vm.declutter.isNotEmpty()) {
+            item {
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp)) {
+                    Text("🧹 Declutter coach", style = MaterialTheme.typography.titleLarge)
+                    Text("Ranked by how much more open the room gets. Rearranging is free; these cost a bit of letting go.", color = Palette.Muted)
+                }
+            }
+            itemsIndexed(vm.declutter, key = { _, d -> d.furnitureId + d.title }) { _, idea -> DeclutterCard(idea, busy = vm.progress != null) { vm.applyIdea(idea) } }
         }
     }
 
@@ -416,7 +447,7 @@ private fun BarRow(label: String, a: String, b: String, fa: Float, fb: Float) {
 }
 
 @Composable
-private fun CurrentDiagnosis(r: OpennessReport) {
+private fun CurrentDiagnosis(r: OpennessReport, goal: LayoutGoal) {
     Card(Modifier.padding(16.dp).fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Palette.Surface), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Diagnosis", style = MaterialTheme.typography.titleMedium)
@@ -424,6 +455,10 @@ private fun CurrentDiagnosis(r: OpennessReport) {
             Text("• Walkable floor: ${pct(r.reachablePct)}  · Seen from door: ${pct(r.visibilityPct)}", color = Palette.Muted)
             if (r.blockedPieces.isNotEmpty()) Text("• Hard to reach: " + r.blockedPieces.joinToString { it.name }, color = Palette.Amber)
             if (r.windowBlockers.isNotEmpty()) Text("• Blocking daylight: " + r.windowBlockers.joinToString { it.name }, color = Palette.Amber)
+            if (goal == LayoutGoal.ACCESSIBLE) Text(
+                if (r.turningCircleOk) "• ♿ 1.5 m turning circle: ✓ (${MovePlanner.fmt(r.clearDiameter)} available)" else "• ♿ 1.5 m turning circle: ✗ only ${MovePlanner.fmt(r.clearDiameter)} — optimize or declutter",
+                color = if (r.turningCircleOk) Palette.Mint else Palette.Coral,
+            )
             if (r.tightSpots.isNotEmpty()) Text("• ${r.tightSpots.size} tight squeeze points on your walking paths (turn on \"Walk paths\")", color = Palette.Muted)
         }
     }
@@ -481,4 +516,24 @@ private fun addOpeningAt(room: Room, p: Vec2, type: OpeningType): Opening? {
     val half = width / 2f / w.length
     val t = w.closestT(p).coerceIn(half, 1f - half)
     return Opening(type = type, wallIndex = wi, t = t, width = width.coerceAtMost(w.length))
+}
+
+@Composable
+private fun DeclutterCard(idea: DeclutterIdea, busy: Boolean, onApply: () -> Unit) {
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(idea.icon, style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(idea.title, style = MaterialTheme.typography.titleMedium)
+            Text(idea.body, color = Palette.Muted)
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("+${idea.gain}", color = Palette.Mint, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+            TextButton(onClick = onApply, enabled = !busy) { Text("Apply") }
+        }
+    }
 }

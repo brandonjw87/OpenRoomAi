@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Looper
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.openroomai.app.data.RoomRepository
 import org.junit.Rule
@@ -63,5 +65,28 @@ class ScreenshotTest {
         vm.optimize()
         waitFor(180_000) { vm.result != null && vm.progress == null }
         snap("plan_optimized")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun threeD() {
+        val room = RoomRepository.demoRoom()
+        val res = com.openroomai.app.engine.LayoutOptimizer(room, com.openroomai.app.engine.Effort.BALANCED, 3L).optimize(room.furniture)
+        var view by androidx.compose.runtime.mutableStateOf<Viewpoint>(Viewpoint.Dollhouse)
+        var after by androidx.compose.runtime.mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            OpenRoomTheme {
+                androidx.compose.runtime.key(view, after) {
+                    Room3DScreen(room, room.furniture, res.layout, res.before, res.after, {}, initialView = view, initialAfter = after)
+                }
+            }
+        }
+        snap("3d_dollhouse_now")
+        after = true; snap("3d_dollhouse_optimized")
+        view = Viewpoint.Door; after = false; snap("3d_door_now")
+        after = true; snap("3d_door_optimized")
+        val sofa = res.layout.first { it.type == com.openroomai.app.model.FurnitureType.SOFA }
+        view = Viewpoint.Seat(sofa.id, "From your sofa"); snap("3d_sofa_optimized")
     }
 }

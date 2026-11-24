@@ -30,6 +30,8 @@ class OccupancyGrid(val room: Room, val cell: Float = 0.1f) {
 
     /** Walkable cells in the empty room: the denominator for "how much floor can you still use". */
     val emptyWalkable: Int
+    private val emptyDist: FloatArray
+    private val walkCache = HashMap<Float, Int>()
 
     init {
         var n = 0
@@ -40,9 +42,15 @@ class OccupancyGrid(val room: Room, val cell: Float = 0.1f) {
         }
         insideCount = n
         stamp(emptyList())
+        emptyDist = dist.copyOf()
+        emptyWalkable = emptyWalkable(SQUEEZE_RADIUS)
+    }
+
+    /** Walkable cells of the empty room for a given clearance radius. */
+    fun emptyWalkable(radius: Float): Int = walkCache.getOrPut(radius) {
         var walk = 0
-        for (i in 0 until size) if (inside[i] && dist[i] >= SQUEEZE_RADIUS) walk++
-        emptyWalkable = walk.coerceAtLeast(1)
+        for (i in 0 until size) if (inside[i] && emptyDist[i] >= radius) walk++
+        walk.coerceAtLeast(1)
     }
 
     fun center(gx: Int, gy: Int) = Vec2(bounds.minX + (gx + 0.5f) * cell, bounds.minY + (gy + 0.5f) * cell)
