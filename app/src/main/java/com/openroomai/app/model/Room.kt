@@ -146,6 +146,10 @@ data class Room(
     val arSessionToken: String = "",
     /** What the room is optimized for (movie night, work from home, …). */
     val goal: LayoutGoal = LayoutGoal.EVERYDAY,
+    /** Compass bearing (° clockwise from north) of the plan's "up" (−Y) direction; null = unknown. */
+    val northDeg: Float? = null,
+    /** Latitude for sun simulation; null = not set (a default is used). */
+    val latitude: Float? = null,
 ) {
     val area get() = Geo.absArea(outline)
     fun walls(): List<Segment> = Geo.edges(outline)

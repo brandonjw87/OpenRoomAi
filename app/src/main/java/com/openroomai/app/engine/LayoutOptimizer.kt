@@ -9,6 +9,9 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
 enum class Effort(val label: String, val blurb: String, val movePenalty: Float, val iterations: Int) {
@@ -40,6 +43,7 @@ class LayoutOptimizer(
     seed: Long = 42L,
     private val goal: LayoutGoal = LayoutGoal.EVERYDAY,
 ) {
+    private val baseSeed = seed
     private val rnd = Random(seed)
     private val walls = room.walls()
     private val normals = walls.indices.map { room.inwardNormal(it) }
@@ -50,6 +54,11 @@ class LayoutOptimizer(
         listOf(s.a, s.b, s.b + n * 0.5f, s.a + n * 0.5f)
     }
     private val grid = OccupancyGrid(room, 0.1f)
+    /** Today's hourly sun positions, only when we know which way the room faces. */
+    private val sunTimes: List<SunPos> = if (room.northDeg == null || room.windows().isEmpty()) emptyList() else {
+        val day = SunModel.dayOf(Season.TODAY)
+        (5..19).map { SunModel.position(room.latitude ?: DEFAULT_LATITUDE, day, it + 0.5f) }.filter { it.up }
+    }
     private val fineGrid by lazy { OccupancyGrid(room, 0.05f) }
 
     /**
@@ -64,16 +73,35 @@ class LayoutOptimizer(
         val before = OpennessAnalyzer.analyze(room, reference, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
         if (start.isEmpty()) return OptimizeResult(start, before, before, emptyList())
 
-        // Several short exploratory runs from different starts (fast 10 cm grid), each refined cold.
-        // Candidates are then judged on the same fine 5 cm grid the final report uses, so a gap
-        // that only "exists" at coarse resolution can't win.
-        val seeds = listOf(start, wallSeed(start), wallSeed(start), wallSeed(start))
+        // Several independent searches from different starts (fast 10 cm grid), each refined cold,
+        // run in parallel — one per CPU core, at least 4. Candidates are then judged on the same
+        // fine 5 cm grid the final report uses, so a gap that only "exists" coarsely can't win.
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val chains = cores.coerceIn(4, 8)
         val explore = (effort.iterations * 0.55f).toInt()
+        val refine = effort.iterations / 5
+        val total = chains.toLong() * (explore + refine)
+        val done = AtomicLong(0)
+        val progressLock = Any()
+        val tick: (Int) -> Unit = { n ->
+            val d = done.addAndGet(n.toLong())
+            synchronized(progressLock) { onProgress((d.toFloat() / total * 0.95f).coerceAtMost(0.95f)) }
+        }
+        val pool = Executors.newFixedThreadPool(minOf(chains, cores)) { r -> Thread(r, "optimizer").apply { isDaemon = true } }
         val candidates = ArrayList<List<Furniture>>()
-        seeds.forEachIndexed { si, seedLayout ->
-            val (layout, _) = anneal(reference, seedLayout, explore, 2.0f) { p -> onProgress((si + p * 0.8f) / seeds.size) }
-            val (refined, _) = anneal(reference, layout, effort.iterations / 5, 0.2f) { p -> onProgress((si + 0.8f + p * 0.2f) / seeds.size) }
-            candidates += refined
+        try {
+            val futures = (0 until chains).map { k ->
+                pool.submit(Callable {
+                    // Each chain owns its grid and RNG, so chains never share mutable state.
+                    val worker = LayoutOptimizer(room, effort, baseSeed * 1_000_003L + k * 7919L, goal)
+                    val seedLayout = if (k == 0) start else worker.wallSeed(start)
+                    val (layout, _) = worker.anneal(reference, seedLayout, explore, 2.0f, tick)
+                    worker.anneal(reference, layout, refine, 0.2f, tick).first
+                })
+            }
+            futures.forEach { candidates += it.get() }
+        } finally {
+            pool.shutdownNow()
         }
         candidates += start
         var bestLayout = start
@@ -90,7 +118,7 @@ class LayoutOptimizer(
         return OptimizeResult(finalLayout, before, after, violations(finalLayout))
     }
 
-    private fun anneal(original: List<Furniture>, start: List<Furniture>, iters: Int, t0: Float, progress: (Float) -> Unit): Pair<List<Furniture>, Float> {
+    private fun anneal(original: List<Furniture>, start: List<Furniture>, iters: Int, t0: Float, tick: (Int) -> Unit): Pair<List<Furniture>, Float> {
         val cur = start.toMutableList()
         var curCost = totalCost(original, cur)
         var best = cur.toList()
@@ -117,8 +145,9 @@ class LayoutOptimizer(
                 cur[idx] = old
                 if (swapIdx >= 0) cur[swapIdx] = oldSwap!!
             }
-            if (it % 250 == 0) progress(frac)
+            if (it % 250 == 249) tick(250)
         }
+        tick(iters % 250)
         return best to bestCost
     }
 
@@ -248,7 +277,19 @@ class LayoutOptimizer(
             }
             else -> {}
         }
+        // Sun awareness: plants into the light, screens out of the glare.
+        if (sunTimes.isNotEmpty()) when (f.type) {
+            FurnitureType.PLANT -> c -= 0.25f * min(4f, sunHours(f.center, f.height, layout, f.id))
+            FurnitureType.TV_STAND -> c += 0.35f * sunHours(f.center + f.front() * (f.depth / 2f + 0.05f), f.height + 0.35f, layout, f.id)
+            else -> {}
+        }
         return c
+    }
+
+    private fun sunHours(p: Vec2, z: Float, layout: List<Furniture>, ignore: String): Float {
+        var h = 0f
+        for (sp in sunTimes) if (SunModel.sunReaches(room, p, z, sp, room.northDeg ?: 0f, layout, ignore)) h += 1f
+        return h
     }
 
     private fun sizeFactor(f: Furniture) = (0.6f + f.footprint()).coerceAtMost(2.5f)

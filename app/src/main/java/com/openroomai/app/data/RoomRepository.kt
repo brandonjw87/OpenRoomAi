@@ -49,7 +49,8 @@ class RoomRepository(context: Context) {
                 Opening(type = OpeningType.WINDOW, wallIndex = 2, t = 0.5f, width = 1.4f),
                 Opening(type = OpeningType.WINDOW, wallIndex = 1, t = 0.55f, width = 1.0f),
             )
-            return base.copy(furniture = furniture, openings = openings)
+            // Top of the plan faces roughly north, so the big window (Wall C) gets southern sun.
+            return base.copy(furniture = furniture, openings = openings, northDeg = 10f, latitude = 40f)
         }
     }
 }

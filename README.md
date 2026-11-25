@@ -37,6 +37,21 @@ and a step-by-step plan for rearranging it so the room **feels as open as possib
   option and ranks them by real openness gain (+N), with one-tap Apply & re-plan.
   It will never tell you to throw out your bed.
 
+## v1.2: faster + 2 more features
+- **⚡ Multi-core optimizer**: independent annealing chains run in parallel (one per core, 4–8),
+  each with its own grid and RNG. Demo room: 4.7 s → 1.9 s per run on 4 cores, and better
+  results (mean openness 76 → 79, worst case 72 → 77 over 6 seeds).
+- **☀️ Sunlight simulator**: uses the compass (rotation-vector sensor, true-north corrected) and
+  your coarse location. AR scans record which way the room faces automatically; sketched rooms
+  calibrate by pointing the camera at Wall A. Traces sun rays through every window onto the
+  floor with tall-furniture shadows, for any hour and season (today, midsummer, equinox,
+  midwinter), plus an all-day "sun hours" map. Flags TV glare, sun on desks and beds, and
+  plants that need more light — and the optimizer now nudges plants into the sun and screens
+  out of the glare.
+- **🎬 Glow-up GIF**: one tap renders an orbiting 3D before → rearranging → after animation with
+  the score counting up, encoded by a built-in GIF encoder (median-cut palette, LZW), and opens
+  the share sheet. ~1.4 MB, 72 frames, under a second to render on a laptop-class CPU.
+
 Also: sketch mode for phones without ARCore, demo room, lock pieces in place, 3 effort levels
 (Quick tidy / Balanced / Full redesign), before→after morph animation, progress checklist, and
 share the plan as an image + text checklist.

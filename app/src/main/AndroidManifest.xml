@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Coarse location only: latitude for the sunlight simulator and true-north correction. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- AR is optional: phones without ARCore can still sketch rooms manually. -->
     <uses-feature android:name="android.hardware.camera.ar" android:required="false" />

@@ -160,6 +160,13 @@ fun ScanScreen(controller: ArController, onDone: (Room) -> Unit, onBack: () -> U
     var error by remember { mutableStateOf<String?>(null) }
     var naming by remember { mutableStateOf(false) }
     remember { controller.startNewScan(); 0 }
+    val ctx = LocalContext.current
+    DisposableEffect(Unit) {
+        val compass = com.openroomai.app.sensors.Compass(ctx)
+        compass.start()
+        controller.compass = compass
+        onDispose { compass.stop(); controller.compass = null }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         ArView(controller, onError = { error = it }, modifier = Modifier.fillMaxSize())

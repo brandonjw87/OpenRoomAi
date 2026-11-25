@@ -104,6 +104,12 @@ class ArController : GLSurfaceView.Renderer {
     private var reticle: Vec2? = null
     private var frameNo = 0L
     private var depthOn = false
+
+    /** Set by the scan screen; lets us record which way the room faces while you scan. */
+    @Volatile var compass: com.openroomai.app.sensors.Compass? = null
+    private var northSin = 0.0
+    private var northCos = 0.0
+    private var northSamples = 0
     @Volatile private var geometryDirty = true
 
     // Preview model.
@@ -174,6 +180,7 @@ class ArController : GLSurfaceView.Renderer {
         step = ScanStep.FLOOR
         corners.clear(); closed = false; openings.clear(); manual.clear(); detected = emptyList()
         accumulator.clear(); pending = null
+        northSin = 0.0; northCos = 0.0; northSamples = 0
         if (!floorY.isNaN()) step = ScanStep.OUTLINE
         publish()
     }
@@ -242,6 +249,7 @@ class ArController : GLSurfaceView.Renderer {
         return Room(
             name = name, outline = outline, furniture = named, openings = st.openings,
             floorY = if (floorY.isNaN()) 0f else floorY, scannedInAr = true, arSessionToken = sessionToken,
+            northDeg = if (northSamples > 30) ((Math.toDegrees(kotlin.math.atan2(northSin, northCos)) + 360.0) % 360.0).toFloat() else null,
         )
     }
 
@@ -372,6 +380,7 @@ class ArController : GLSurfaceView.Renderer {
             Matrix.invertM(invVp, 0, vp, 0)
 
             updateFloor(frame)
+            sampleNorth(frame)
             if (!floorY.isNaN()) {
                 reticle = floorHit(frame, viewW / 2f, viewH / 2f)
                 if (step == ScanStep.FLOOR) step = ScanStep.OUTLINE
@@ -386,6 +395,20 @@ class ArController : GLSurfaceView.Renderer {
         } catch (t: Throwable) {
             Log.e("OpenRoomAR", "frame", t)
         }
+    }
+
+    /**
+     * Pair the compass bearing of the camera with the camera's heading in AR space; their
+     * difference is the compass bearing of the plan's "up" (−Z) axis. Averaged on the circle.
+     */
+    private fun sampleNorth(frame: Frame) {
+        val bearing = compass?.cameraBearing ?: return
+        val z = frame.camera.pose.zAxis
+        val fx = -z[0]; val fz = -z[2]
+        if (kotlin.math.hypot(fx, fz) < 0.5f) return
+        val rel = Math.toDegrees(kotlin.math.atan2(fx, -fz).toDouble())
+        val north = Math.toRadians(bearing - rel)
+        northSin += kotlin.math.sin(north); northCos += kotlin.math.cos(north); northSamples++
     }
 
     private fun updateFloor(frame: Frame) {

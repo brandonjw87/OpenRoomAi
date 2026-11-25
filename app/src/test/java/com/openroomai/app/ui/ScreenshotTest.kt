@@ -7,6 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.openroomai.app.data.RoomRepository
 import org.junit.Rule
 import org.junit.Test
@@ -27,7 +29,8 @@ class ScreenshotTest {
     private fun pump(ms: Long = 50) {
         shadowOf(Looper.getMainLooper()).idle()
         rule.mainClock.advanceTimeBy(ms)
-        shadowOf(Looper.getMainLooper()).idle()
+        // Let delay()-based coroutines on the main dispatcher fire, too.
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(ms))
     }
 
     private fun waitFor(timeoutMs: Long, cond: () -> Boolean) {
@@ -88,5 +91,30 @@ class ScreenshotTest {
         after = true; snap("3d_door_optimized")
         val sofa = res.layout.first { it.type == com.openroomai.app.model.FurnitureType.SOFA }
         view = Viewpoint.Seat(sofa.id, "From your sofa"); snap("3d_sofa_optimized")
+    }
+
+    @Test
+    fun glowUpGif() {
+        val room = RoomRepository.demoRoom()
+        val res = com.openroomai.app.engine.LayoutOptimizer(room, com.openroomai.app.engine.Effort.BALANCED, 3L).optimize(room.furniture)
+        val t0 = System.currentTimeMillis()
+        val f = GlowUp.render(rule.activity, room, room.furniture, res.layout, res.before, res.after)
+        println("GLOWUP ${f.length() / 1024} KB in ${System.currentTimeMillis() - t0} ms")
+        val out = File(System.getProperty("user.dir"), "build/screens").apply { mkdirs() }
+        f.copyTo(File(out, "glowup.gif"), overwrite = true)
+    }
+
+    @Test
+    fun planWithSunlight() {
+        val vm = AppViewModel(rule.activity.application)
+        rule.mainClock.autoAdvance = false
+        rule.setContent { OpenRoomTheme { PlanScreen(vm, true, {}, {}) } }
+        vm.openDemo()
+        waitFor(30_000) { vm.report != null }
+        vm.sunSeason = com.openroomai.app.engine.Season.WINTER
+        vm.sunHour = 11f
+        rule.onNodeWithText("☀️ Sunlight").performClick()
+        waitFor(60_000) { vm.sunReport != null }
+        snap("plan_sunlight")
     }
 }

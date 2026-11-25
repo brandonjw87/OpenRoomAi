@@ -12,6 +12,10 @@ import com.openroomai.app.engine.DeclutterCoach
 import com.openroomai.app.engine.DeclutterIdea
 import com.openroomai.app.engine.Effort
 import com.openroomai.app.engine.LayoutGoal
+import com.openroomai.app.engine.Season
+import com.openroomai.app.engine.SunModel
+import com.openroomai.app.engine.SunReport
+import java.io.File
 import com.openroomai.app.engine.Insight
 import com.openroomai.app.engine.Insights
 import com.openroomai.app.engine.LayoutOptimizer
@@ -71,6 +75,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var fitProgress by mutableStateOf<Float?>(null)
         private set
     var toast by mutableStateOf<String?>(null)
+    // ---- Sunlight simulator
+    var sunSeason by mutableStateOf(Season.TODAY)
+    var sunHour by mutableStateOf(14f)
+    var sunReport by mutableStateOf<SunReport?>(null)
+        private set
+    private var sunJob: Job? = null
+    private var sunKey: Any? = null
+
+    // ---- Glow-up GIF
+    var glowUpProgress by mutableStateOf<Float?>(null)
+        private set
+    var glowUpFile by mutableStateOf<File?>(null)
+
     var declutter by mutableStateOf<List<DeclutterIdea>>(emptyList())
         private set
     private var declutterJob: Job? = null
@@ -261,5 +278,49 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         fitCheck = null
         reanalyze()
         toast = "${item.name} added to the plan 🛒"
+    }
+
+    // ------------------------------------------------------------ sunlight
+
+    /** Full-day simulation for [layout] (cached), then a cheap re-trace for the selected hour. */
+    fun refreshSun(layout: List<Furniture>) {
+        val r = room ?: return
+        val key = listOf(layout, sunSeason, r.northDeg, r.latitude, r.outline, r.openings)
+        val season = sunSeason
+        val hour = sunHour
+        sunJob?.cancel()
+        sunJob = viewModelScope.launch {
+            delay(40)
+            val rep = withContext(Dispatchers.Default) {
+                val base = sunReport
+                if (key == sunKey && base != null) SunModel.atHour(r, layout, base, season, hour)
+                else SunModel.simulate(r, layout, season, hour)
+            }
+            sunKey = key
+            sunReport = rep
+        }
+    }
+
+
+    /** Orientation/latitude don't move furniture, so the current plan stays valid. */
+    fun setNorth(deg: Float) = update(invalidate = false) { it.copy(northDeg = Geo.normalizeDeg(deg)) }
+    fun setLatitude(lat: Float) = update(invalidate = false) { it.copy(latitude = lat.coerceIn(-66f, 66f)) }
+
+    // ------------------------------------------------------------ glow-up GIF
+
+    fun makeGlowUp() {
+        val r = room ?: return
+        val res = result ?: return
+        if (glowUpProgress != null) return
+        glowUpProgress = 0f
+        viewModelScope.launch {
+            val file = withContext(Dispatchers.Default) {
+                runCatching {
+                    GlowUp.render(getApplication(), r, r.furniture, res.layout, res.before, res.after) { glowUpProgress = it }
+                }.getOrNull()
+            }
+            glowUpProgress = null
+            if (file == null) toast = "Couldn't render the GIF. Try again?" else glowUpFile = file
+        }
     }
 }

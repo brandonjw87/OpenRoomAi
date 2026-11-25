@@ -121,7 +121,15 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
     val layer = rememberGraphicsLayer()
 
     LaunchedEffect(result) { if (result != null) showAfter = true }
+    LaunchedEffect(vm.glowUpFile) {
+        val f = vm.glowUpFile ?: return@LaunchedEffect
+        vm.glowUpFile = null
+        GlowUp.share(ctx, f, room, result?.before?.score ?: 0, result?.after?.score ?: 0)
+    }
     val after = showAfter && result != null
+    LaunchedEffect(layers.sunlight, after, room, result, vm.sunSeason, vm.sunHour) {
+        if (layers.sunlight) vm.refreshSun(if (after && result != null) result.layout else room.furniture)
+    }
     val morph by animateFloatAsState(if (after) 1f else 0f, tween(900), label = "morph")
     val shownLayout = if (result != null) lerpLayout(room.furniture, result.layout, morph) else room.furniture
     val shownReport: OpennessReport? = if (after) result!!.after else vm.report
@@ -174,6 +182,7 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                         report = if (morph in 0.01f..0.99f) null else shownReport,
                         modifier = Modifier.fillMaxSize(),
                         layers = layers,
+                        sun = if (layers.sunlight && morph !in 0.01f..0.99f) vm.sunReport else null,
                         ghost = if (after) room.furniture else null,
                         selectedId = selected,
                         interactive = !after,
@@ -198,9 +207,16 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                     LayerChip("Walk paths", layers.flows) { layers = layers.copy(flows = !layers.flows) }
                     LayerChip("View from door", layers.sightlines) { layers = layers.copy(sightlines = !layers.sightlines) }
                     LayerChip("Open circle", layers.openCircle) { layers = layers.copy(openCircle = !layers.openCircle) }
+                    LayerChip("☀️ Sunlight", layers.sunlight) {
+                        // Sun and openness heatmaps fight for the same pixels; show one at a time.
+                        layers = if (layers.sunlight) layers.copy(sunlight = false) else layers.copy(sunlight = true, heatmap = false)
+                    }
                 }
                 if (layers.heatmap) Legend()
             }
+        }
+        if (layers.sunlight) item {
+            SunCard(vm, room, layers.sunHours) { layers = layers.copy(sunHours = it) }
         }
 
         // ---- Edit tools (current layout only)
@@ -282,6 +298,16 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                         Text("I moved it all ✓")
                     }
                 }
+            }
+            item {
+                val gp = vm.glowUpProgress
+                if (gp != null) Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    LinearProgressIndicator(progress = { gp }, Modifier.fillMaxWidth())
+                    Text("Rolling the cameras… 🎬", color = Palette.Muted)
+                } else FilledTonalButton(
+                    onClick = { vm.makeGlowUp() },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().height(52.dp),
+                ) { Text("🎬  Share your glow-up GIF") }
             }
             if (vm.steps.isNotEmpty()) {
                 item {

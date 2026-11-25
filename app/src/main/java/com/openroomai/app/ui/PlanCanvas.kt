@@ -38,6 +38,8 @@ import com.openroomai.app.engine.COMFORT_RADIUS
 import com.openroomai.app.engine.OccupancyGrid
 import com.openroomai.app.engine.OpennessReport
 import com.openroomai.app.engine.SQUEEZE_RADIUS
+import com.openroomai.app.engine.SunModel
+import com.openroomai.app.engine.SunReport
 import com.openroomai.app.model.Furniture
 import com.openroomai.app.model.Geo
 import com.openroomai.app.model.OpeningType
@@ -53,6 +55,9 @@ data class Layers(
     val sightlines: Boolean = false,
     val openCircle: Boolean = true,
     val labels: Boolean = true,
+    val sunlight: Boolean = false,
+    /** Sunlight layer: whole-day sun hours instead of the selected moment. */
+    val sunHours: Boolean = false,
 )
 
 /** Maps plan meters to canvas pixels, fitting the room with padding. */
@@ -87,6 +92,22 @@ private fun heatBitmap(rep: OpennessReport): ImageBitmap {
     return bmp.asImageBitmap()
 }
 
+private fun sunBitmap(sun: SunReport, hoursMode: Boolean): ImageBitmap {
+    val g = sun.grid
+    val px = IntArray(g.size)
+    val maxH = sun.maxHours.coerceAtLeast(1f)
+    for (i in 0 until g.size) {
+        if (!g.inside[i]) continue
+        px[i] = if (hoursMode) {
+            val t = sun.sunHours[i] / maxH
+            if (t <= 0f) 0x22000033 else ((0x30 + (0x9F * t).toInt()) shl 24) or 0xFFC93D
+        } else if (sun.litNow[i]) 0x99FFD54F.toInt() else if (g.blocked[i]) 0 else 0x33000020
+    }
+    val bmp = Bitmap.createBitmap(g.w, g.h, Bitmap.Config.ARGB_8888)
+    bmp.setPixels(px, 0, g.w, 0, 0, g.w, g.h)
+    return bmp.asImageBitmap()
+}
+
 private fun sightBitmap(rep: OpennessReport): ImageBitmap {
     val g = rep.grid
     val px = IntArray(g.size)
@@ -109,6 +130,7 @@ fun PlanCanvas(
     report: OpennessReport?,
     modifier: Modifier = Modifier,
     layers: Layers = Layers(),
+    sun: SunReport? = null,
     ghost: List<Furniture>? = null,
     selectedId: String? = null,
     highlightId: String? = null,
@@ -121,6 +143,7 @@ fun PlanCanvas(
     val measurer = rememberTextMeasurer()
     val heat = remember(report) { report?.let { heatBitmap(it) } }
     val sight = remember(report) { report?.let { sightBitmap(it) } }
+    val sunImg = remember(sun, layers.sunHours) { if (layers.sunlight) sun?.let { sunBitmap(it, layers.sunHours) } else null }
     val layoutState by rememberUpdatedState(layout)
     val roomState by rememberUpdatedState(room)
     val pad = if (compact) 10f else 56f
@@ -165,6 +188,8 @@ fun PlanCanvas(
     Canvas(modifier.then(gestureMod)) {
         val tr = PlanTransform(room, size, pad)
         drawPlan(this, tr, room, layout, report, layers, ghost, selectedId, highlightId, heat, sight, measurer, compact)
+        if (sunImg != null && sun != null) drawSun(tr, room, sun, sunImg, layers.sunHours, measurer)
+        if (!compact && room.northDeg != null) drawCompass(room.northDeg, measurer)
     }
 }
 
@@ -225,7 +250,7 @@ fun drawPlan(
             drawCircle(Palette.Mint, r, c, style = Stroke(2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
             if (!compact) {
                 val t = measurer.measure("${"%.1f".format(report.clearDiameter)} m open", TextStyle(color = Palette.Mint, fontSize = 11.sp, fontWeight = FontWeight.Bold))
-                drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - r - t.size.height - 2f))
+                drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - r + 8f)) // inside the ring: clear of wall labels
             }
         }
     }
@@ -344,4 +369,39 @@ fun lerpLayout(a: List<Furniture>, b: List<Furniture>, t: Float): List<Furniture
         val r = ta.rotationDeg + Geo.shortestAngleDiffDeg(ta.rotationDeg, tb.rotationDeg) * e
         tb.withPose(c, r)
     }
+}
+
+private fun DrawScope.drawSun(tr: PlanTransform, room: Room, sun: SunReport, img: ImageBitmap, hoursMode: Boolean, measurer: TextMeasurer) {
+    val g = sun.grid
+    val tl = tr.toScreen(Vec2(g.bounds.minX, g.bounds.minY))
+    val dst = IntSize((g.w * g.cell * tr.scale).roundToInt(), (g.h * g.cell * tr.scale).roundToInt())
+    drawImage(img, dstOffset = IntOffset(tl.x.roundToInt(), tl.y.roundToInt()), dstSize = dst, filterQuality = FilterQuality.Low)
+    // A sun marker on the canvas edge, in the direction the light comes from.
+    if (!hoursMode && sun.sunNow.up) {
+        val dir = SunModel.planDir(sun.sunNow.azimuth, room.northDeg ?: 0f)
+        val c = tr.toScreen(Geo.centroid(room.outline))
+        val inset = 26f
+        val tx = if (dir.x > 1e-4f) (size.width - inset - c.x) / dir.x else if (dir.x < -1e-4f) (inset - c.x) / dir.x else Float.MAX_VALUE
+        val ty = if (dir.y > 1e-4f) (size.height - inset - c.y) / dir.y else if (dir.y < -1e-4f) (inset - c.y) / dir.y else Float.MAX_VALUE
+        val t = minOf(tx, ty)
+        val p = Offset(c.x + dir.x * t, c.y + dir.y * t)
+        drawCircle(Color(0x66FFD54F), 24f, p)
+        drawCircle(Color(0xFFFFD54F), 24f, p, style = Stroke(2f))
+        val txt = measurer.measure("☀️", TextStyle(fontSize = 17.sp))
+        drawText(txt, topLeft = Offset(p.x - txt.size.width / 2f, p.y - txt.size.height / 2f))
+    }
+}
+
+/** Compass rose in the top-right corner: where north is on this plan. */
+private fun DrawScope.drawCompass(northDeg: Float, measurer: TextMeasurer) {
+    val c = Offset(size.width - 48f, 48f)
+    val n = SunModel.planDir(0f, northDeg)
+    drawCircle(Color.Black.copy(alpha = 0.5f), 36f, c)
+    drawCircle(Color.White.copy(alpha = 0.25f), 36f, c, style = Stroke(1.5f))
+    val tip = Offset(c.x + n.x * 22f, c.y + n.y * 22f)
+    val tail = Offset(c.x - n.x * 18f, c.y - n.y * 18f)
+    drawLine(Palette.Coral, c, tip, strokeWidth = 6f, cap = StrokeCap.Round)
+    drawLine(Color.White.copy(alpha = 0.7f), c, tail, strokeWidth = 4f, cap = StrokeCap.Round)
+    val t = measurer.measure("N", TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+    drawText(t, topLeft = Offset(tip.x + n.x * 2f - t.size.width / 2f, tip.y + n.y * 2f - t.size.height / 2f - 10f * (1f - kotlin.math.abs(n.x))))
 }
