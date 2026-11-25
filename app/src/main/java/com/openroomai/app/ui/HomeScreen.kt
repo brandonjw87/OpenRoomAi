@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -107,10 +108,10 @@ fun HomeScreen(
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = { sketchDialog = true }, modifier = Modifier.weight(1f).height(52.dp)) {
+                OutlinedButton(onClick = { sketchDialog = true }, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
                     Icon(Icons.Default.Draw, null); Spacer(Modifier.width(6.dp)); Text("Sketch by size")
                 }
-                OutlinedButton(onClick = onDemo, modifier = Modifier.weight(1f).height(52.dp)) {
+                OutlinedButton(onClick = onDemo, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Demo room")
                 }
             }

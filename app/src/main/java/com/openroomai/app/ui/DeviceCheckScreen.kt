@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.SystemClock
 import android.system.Os
 import android.system.OsConstants
 import androidx.compose.foundation.background
@@ -121,7 +120,7 @@ fun DeviceCheckScreen(onBack: () -> Unit, probeAr: Boolean = true) {
 
             // Engine timings on the demo room.
             val room = RoomRepository.demoRoom()
-            fun <T> timed(block: () -> T): Pair<T, Long> { val t0 = SystemClock.elapsedRealtime(); val r = block(); return r to SystemClock.elapsedRealtime() - t0 }
+            fun <T> timed(block: () -> T): Pair<T, Long> { val t0 = System.nanoTime(); val r = block(); return r to (System.nanoTime() - t0) / 1_000_000 }
             val (res, optMs) = timed { LayoutOptimizer(room, Effort.BALANCED, 7L).optimize(room.furniture) }
             add("Optimizer (demo, balanced)", "$optMs ms · openness ${res.before.score} → ${res.after.score}")
             val (fs, fsMs) = timed { FallSafety.audit(room, res.layout) }

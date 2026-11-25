@@ -15,6 +15,13 @@ android {
         targetSdk = 35
         versionCode = 167
         versionName = "1.67"
+        // Phones are ARM; x86_64 keeps emulators/Chromebooks working. 32-bit x86 is emulator-only.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
+    }
+    packaging {
+        // Compress native libs in the APK (smaller download). Safe on 16 KB-page devices because
+        // every bundled .so (ARCore, LiteRT) has 16 KB-aligned LOAD segments — verified.
+        jniLibs { useLegacyPackaging = true }
     }
 
     buildTypes {

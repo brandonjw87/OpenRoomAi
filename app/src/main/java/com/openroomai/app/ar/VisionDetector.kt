@@ -2,7 +2,6 @@ package com.openroomai.app.ar
 
 import android.content.Context
 import android.media.Image
-import android.os.SystemClock
 import android.util.Log
 import com.openroomai.app.engine.Detection
 import com.openroomai.app.engine.NBox
@@ -31,7 +30,7 @@ class VisionDetector private constructor(private val interpreter: Interpreter, p
 
     @Synchronized
     fun detect(rgb: ByteArray): List<Detection> {
-        val t0 = SystemClock.elapsedRealtime()
+        val t0 = System.nanoTime()
         input.rewind(); input.put(rgb, 0, SIZE * SIZE * 3); input.rewind()
         val outputs = HashMap<Int, Any>()
         outputs[0] = boxes; outputs[1] = classes; outputs[2] = scores; outputs[3] = count
@@ -51,7 +50,7 @@ class VisionDetector private constructor(private val interpreter: Interpreter, p
                 meanColor(rgb, NBox(b[1], b[0], b[3], b[2])),
             )
         }
-        lastMillis = SystemClock.elapsedRealtime() - t0
+        lastMillis = (System.nanoTime() - t0) / 1_000_000
         return out
     }
 
