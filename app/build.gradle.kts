@@ -13,8 +13,8 @@ android {
         applicationId = "com.openroomai.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 167
-        versionName = "1.67"
+        versionCode = 200
+        versionName = "2.0"
     }
     // One lean APK per CPU type (arm64-v8a is what modern phones like the Pixel use) plus a
     // universal one. Phones are ARM; x86_64 keeps emulators/Chromebooks working; 32-bit x86 is dropped.
@@ -27,7 +27,7 @@ android {
         }
     }
     packaging {
-        // Compress native libs in the APK (smaller download). Safe on 16 KB-page devices because
+        // Compress native libs in the APK (smaller download). Works on 16 KB-page devices because
         // every bundled .so (ARCore, LiteRT) has 16 KB-aligned LOAD segments — verified.
         jniLibs { useLegacyPackaging = true }
     }

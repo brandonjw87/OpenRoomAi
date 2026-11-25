@@ -99,7 +99,7 @@ fun CatalogDialog(vm: AppViewModel, onDismiss: () -> Unit, onPlaceInAr: ((Furnit
                     )
                     if (fc.result.violations.isNotEmpty()) Text(fc.result.violations.joinToString("\n"), color = Palette.Coral)
                     Box(Modifier.fillMaxWidth().aspectRatio(1.1f).clip(RoundedCornerShape(20.dp)).background(Palette.Surface)) {
-                        PlanCanvas(room, fc.result.layout, fc.result.after, Modifier.fillMaxSize(), layers = Layers(heatmap = true, openCircle = true), ghost = room.furniture, highlightId = newItem.id)
+                        PlanCanvas(room, fc.result.layout, fc.result.after, Modifier.fillMaxSize(), layers = Layers(flows = false), space = fc.result.space?.after, ghost = room.furniture, highlightId = newItem.id)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(onClick = { vm.dismissFit() }, modifier = Modifier.weight(1f)) { Text("Try another size") }

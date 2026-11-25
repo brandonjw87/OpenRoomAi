@@ -610,7 +610,7 @@ class ArController : GLSurfaceView.Renderer {
 
         if (!depthOn || frameNo % 2 != 0L) return
         // Prefer Raw Depth + its confidence image (as in Google's ARCore Raw Depth codelab):
-        // fewer points, but each one is trustworthy. Fall back to smoothed depth if unavailable.
+        // fewer points, but each one is trustworthy. Smoothed depth is used where raw isn't offered.
         val ok = rawDepthOk && try {
             accumulateDepth(frame, raw = true)
         } catch (_: NotYetAvailableException) {

@@ -231,6 +231,45 @@ object Geo {
         return theta to (qc - pc.rotated(theta))
     }
 
+    /** Proper crossing of two segments (touching or collinear overlap doesn't count). */
+    fun segmentsCross(a: Segment, b: Segment): Boolean {
+        fun orient(p: Vec2, q: Vec2, r: Vec2) = (q - p) cross (r - p)
+        val d1 = orient(b.a, b.b, a.a); val d2 = orient(b.a, b.b, a.b)
+        val d3 = orient(a.a, a.b, b.a); val d4 = orient(a.a, a.b, b.b)
+        val eps = 1e-6f
+        return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))
+    }
+
+    /** Strictly inside a convex polygon (not on, or within [margin] of, its boundary). */
+    fun strictlyInsideConvex(p: Vec2, poly: List<Vec2>, margin: Float = 0.01f): Boolean {
+        var sign = 0
+        for (i in poly.indices) {
+            val a = poly[i]; val b = poly[(i + 1) % poly.size]
+            val c = (b - a) cross (p - a)
+            val s = if (c > 0) 1 else if (c < 0) -1 else 0
+            if (s == 0) return false
+            if (sign == 0) sign = s else if (s != sign) return false
+        }
+        return edges(poly).minOf { it.distanceTo(p) } > margin
+    }
+
+    /**
+     * How far a convex piece pokes outside a (possibly concave) room outline; 0 = fully inside.
+     * Checking corners alone misses L-shaped rooms, where the room's inside corner can poke into
+     * a piece whose four corners are all inside — so room vertices and edge crossings count too.
+     */
+    fun outsideAmount(quad: List<Vec2>, outline: List<Vec2>): Float {
+        var p = 0f
+        for (v in quad) if (!pointInPolygon(v, outline)) p += 0.05f + distanceToBoundary(v, outline)
+        for (v in outline) if (strictlyInsideConvex(v, quad)) p += 0.05f + edges(quad).minOf { it.distanceTo(v) }
+        if (p == 0f) {
+            val qe = edges(quad)
+            val re = edges(outline)
+            if (qe.any { e -> re.any { w -> segmentsCross(e, w) } }) p += 0.05f
+        }
+        return p
+    }
+
     fun sqr(v: Float) = v * v
     fun clamp01(v: Float) = v.coerceIn(0f, 1f)
     fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t

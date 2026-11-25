@@ -13,10 +13,32 @@ data class Insight(val icon: String, val title: String, val body: String, val im
  */
 object Insights {
 
-    fun explain(room: Room, before: OpennessReport, after: OpennessReport, layout: List<Furniture>): List<Insight> {
+    fun explain(room: Room, before: OpennessReport, after: OpennessReport, layout: List<Furniture>, space: SpaceDiff? = null): List<Insight> {
         val out = ArrayList<Insight>()
+        if (space != null) {
+            val zb = space.before.zone; val za = space.after.zone
+            if (za != null && space.zoneGain > 0.2f) out += Insight(
+                "⬜", "One bigger open zone",
+                "The largest open rectangle grows to ${Units.dims(za.long, za.short)} (${Units.area(za.area)})" +
+                    (if (zb != null) ", up from ${Units.dims(zb.long, zb.short)}. " else ". ") +
+                    "One consolidated open area reads as far more spacious than several small gaps.",
+                (space.zoneGain * 12).roundToInt(),
+            )
+            if (space.usableGain > 0.1f) out += Insight(
+                "📐", "${Units.areaGain(space.usableGain)} of usable open floor",
+                "Floor in gaps narrower than ${Units.len(Lanes.USABLE)} doesn't count: you can't stand there. These moves turn slivers behind and between furniture into floor you can use.",
+                (space.usableGain * 10).roundToInt(),
+            )
+            val lb = space.before.narrowestLane; val la = space.after.narrowestLane
+            if (lb != null && la != null && la.width - lb.width > 0.025f) out += Insight(
+                "↔️", "Wider flow",
+                "The tightest walkway goes from ${Units.width(lb.width)} to ${Units.width(la.width)}. " +
+                    "${Units.width(Lanes.CLEAR)} feels clear; ${Units.width(Lanes.GENEROUS)} lets two people pass.",
+                ((la.width - lb.width) / Units.INCH).roundToInt(),
+            )
+        }
         val dClear = after.clearDiameter - before.clearDiameter
-        if (dClear > 0.15f) out += Insight(
+        if (space == null && dClear > 0.15f) out += Insight(
             "⭕", "A bigger open heart",
             "The largest uninterrupted floor patch grows from ${MovePlanner.fmt(before.clearDiameter)} to ${MovePlanner.fmt(after.clearDiameter)} across. " +
                 "An empty center is the #1 thing that makes a room read as spacious.",
@@ -33,7 +55,7 @@ object Insights {
         if (dReach > 0.03f) out += Insight(
             "🚶", "Easier to walk around",
             "Walkable floor goes from ${(before.reachablePct * 100).roundToInt()}% to ${(after.reachablePct * 100).roundToInt()}%. " +
-                "Clear 90 cm paths mean no sideways shuffling past corners.",
+                "Clear ${Units.width(Lanes.CLEAR)} lanes mean no sideways shuffling past corners.",
             (dReach * 100).roundToInt(),
         )
         if (after.lightPct > before.lightPct + 0.05f) out += Insight(
@@ -48,7 +70,7 @@ object Insights {
         )
         if (after.blockedPieces.isNotEmpty()) out += Insight(
             "⚠️", "Still hard to reach",
-            after.blockedPieces.joinToString { it.name } + " can't be reached with a 60 cm path. Consider a smaller piece or removing one item.",
+            after.blockedPieces.joinToString { it.name } + " can't be reached through a ${Units.width(2 * SQUEEZE_RADIUS)} gap. Consider a smaller piece or removing one item.",
             -10,
         )
 

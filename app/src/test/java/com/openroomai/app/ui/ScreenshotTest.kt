@@ -10,7 +10,6 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import com.openroomai.app.data.RoomRepository
 import org.junit.Rule
 import org.junit.Test
@@ -76,7 +75,7 @@ class ScreenshotTest {
     @Config(qualifiers = "w411dp-h891dp-xxhdpi")
     fun threeD() {
         val room = RoomRepository.demoRoom()
-        val res = com.openroomai.app.engine.LayoutOptimizer(room, com.openroomai.app.engine.Effort.BALANCED, 3L).optimize(room.furniture)
+        val res = com.openroomai.app.engine.LayoutOptimizer(room, com.openroomai.app.engine.SpaceGoal.MAX_OPEN_CENTER, 3L).optimize(room.furniture)
         var view by androidx.compose.runtime.mutableStateOf<Viewpoint>(Viewpoint.Dollhouse)
         var after by androidx.compose.runtime.mutableStateOf(false)
         rule.mainClock.autoAdvance = false
@@ -98,7 +97,7 @@ class ScreenshotTest {
     @Test
     fun glowUpGif() {
         val room = RoomRepository.demoRoom()
-        val res = com.openroomai.app.engine.LayoutOptimizer(room, com.openroomai.app.engine.Effort.BALANCED, 3L).optimize(room.furniture)
+        val res = com.openroomai.app.engine.LayoutOptimizer(room, com.openroomai.app.engine.SpaceGoal.MAX_OPEN_CENTER, 3L).optimize(room.furniture)
         val t0 = System.currentTimeMillis()
         val f = GlowUp.render(rule.activity, room, room.furniture, res.layout, res.before, res.after)
         println("GLOWUP ${f.length() / 1024} KB in ${System.currentTimeMillis() - t0} ms")
@@ -134,7 +133,9 @@ class ScreenshotTest {
             }
         }
         vm.openDemo()
-        waitFor(30_000) { vm.report != null && vm.mirrorSpots.isNotEmpty() }
+        waitFor(30_000) { vm.report != null }
+        rule.onNodeWithText("🪞 Open-Look Studio").performClick()
+        waitFor(30_000) { vm.mirrorSpots.isNotEmpty() }
         vm.addMirror(vm.mirrorSpots.first())
         vm.setPaint(com.openroomai.app.engine.OpenLook.PAINTS[3])
         waitFor(10_000) { vm.room?.mirrors?.isNotEmpty() == true }
@@ -176,17 +177,47 @@ class ScreenshotTest {
 
     @Test
     @Config(qualifiers = "w411dp-h4200dp-xxhdpi")
-    fun easyLivingForGrandparents() {
+    fun microNudgesGoalsAndCompare() {
         val vm = AppViewModel(rule.activity.application)
+        vm.changeUnits(com.openroomai.app.engine.Units.System.IMPERIAL)
         rule.mainClock.autoAdvance = false
         rule.setContent { OpenRoomTheme { PlanScreen(vm, true, {}, {}) } }
         vm.openDemo()
-        waitFor(30_000) { vm.report != null && vm.fallSafety != null }
-        snap("easy_before")
-        rule.onNodeWithText("🧓 Rearrange for easy living").performClick()
-        waitFor(180_000) { vm.result != null && vm.progress == null }
-        waitFor(30_000) { vm.fallSafety != null }
-        snap("easy_after")
+        waitFor(60_000) { vm.space != null && !vm.nudging && vm.nudges.isNotEmpty() }
+        snap("v2_plan_nudges")
+        // Preview the best nudge on the plan, then apply it, then undo it.
+        val first = vm.nudges.first()
+        rule.onAllNodesWithText("Preview")[0].performClick()
+        waitFor(30_000) { vm.previewNudge == first && vm.previewSpace != null }
+        snap("v2_nudge_preview")
+        val before = vm.room!!.furniture
+        rule.onAllNodesWithText("Apply")[0].performClick()
+        waitFor(10_000) { vm.room!!.furniture != before }
+        check(vm.canUndo)
+        vm.undo()
+        waitFor(10_000) { vm.room!!.furniture == before }
+        // One-tap goal, then the before/after wipe.
+        rule.onNodeWithText("Widest flow paths").performClick()
+        waitFor(240_000) { vm.result != null && vm.progress == null }
+        snap("v2_goal_widest_flow")
+        rule.onNodeWithText("Compare").performClick()
+        snap("v2_compare")
+        rule.onNodeWithText("Max open center").performClick()
+        waitFor(240_000) { vm.result?.spaceGoal == com.openroomai.app.engine.SpaceGoal.MAX_OPEN_CENTER && vm.progress == null }
+        snap("v2_goal_max_open")
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h1600dp-xxhdpi")
+    fun firstRunOnboardingMetric() {
+        val saved = com.openroomai.app.engine.Units.system
+        com.openroomai.app.engine.Units.system = com.openroomai.app.engine.Units.System.METRIC
+        try {
+            rule.setContent { OpenRoomTheme { HomeScreen(emptyList(), true, {}, { _, _, _ -> }, {}, {}, {}, imperial = false) } }
+            snap("v2_home_first_run")
+        } finally {
+            com.openroomai.app.engine.Units.system = saved
+        }
     }
 
     @Test

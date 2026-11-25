@@ -25,7 +25,7 @@ const val DEFAULT_LATITUDE = 40f
 enum class Season(val label: String, val dayOfYear: Int) {
     TODAY("Today", -1),
     SUMMER("Midsummer", 172),
-    EQUINOX("Spring/fall", 80),
+    EQUINOX("Equinox", 80),
     WINTER("Midwinter", 355),
 }
 

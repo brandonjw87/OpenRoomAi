@@ -7,7 +7,7 @@ import com.openroomai.app.model.Vec2
 
 /**
  * A coordinate frame aligned with the room's longest wall. AR-scanned rooms sit at arbitrary
- * angles in world space; rectangles that should "hug" the room (play mats, rugs) are searched
+ * angles in world space; rectangles that should "hug" the room (open zones, rugs) are searched
  * in this frame and rotated back. Openings and mirrors reference walls by index, so rotated
  * copies of a room stay valid.
  */

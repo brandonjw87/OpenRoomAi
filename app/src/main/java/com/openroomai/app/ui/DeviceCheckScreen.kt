@@ -52,8 +52,10 @@ import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.openroomai.app.ar.VisionDetector
 import com.openroomai.app.data.RoomRepository
-import com.openroomai.app.engine.Effort
-import com.openroomai.app.engine.FallSafety
+import com.openroomai.app.engine.MicroNudge
+import com.openroomai.app.engine.OpenSpace
+import com.openroomai.app.engine.SpaceGoal
+import com.openroomai.app.engine.Units
 import com.openroomai.app.engine.LayoutOptimizer
 import com.openroomai.app.engine.OpenLook
 import com.openroomai.app.engine.Season
@@ -77,7 +79,7 @@ fun DeviceCheckScreen(onBack: () -> Unit, probeAr: Boolean = true) {
     LaunchedEffect(Unit) {
         val out = ArrayList<Pair<String, String>>()
         fun add(k: String, v: String) { out += k to v; rows = out.toList() }
-        add("App", "OpenRoom AI ${appVersion(ctx)}")
+        add("App", "$APP_NAME ${appVersion(ctx)}")
         add("Phone", "${Build.MANUFACTURER} ${Build.MODEL}")
         add("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         add("CPU", "${Runtime.getRuntime().availableProcessors()} cores · ${Build.SUPPORTED_ABIS.joinToString()}")
@@ -121,10 +123,12 @@ fun DeviceCheckScreen(onBack: () -> Unit, probeAr: Boolean = true) {
             // Engine timings on the demo room.
             val room = RoomRepository.demoRoom()
             fun <T> timed(block: () -> T): Pair<T, Long> { val t0 = System.nanoTime(); val r = block(); return r to (System.nanoTime() - t0) / 1_000_000 }
-            val (res, optMs) = timed { LayoutOptimizer(room, Effort.BALANCED, 7L).optimize(room.furniture) }
-            add("Optimizer (demo, balanced)", "$optMs ms · openness ${res.before.score} → ${res.after.score}")
-            val (fs, fsMs) = timed { FallSafety.audit(room, res.layout) }
-            add("Easy-living check", "$fsMs ms · score ${fs.score}")
+            val (sp, spMs) = timed { OpenSpace.analyze(room, room.furniture) }
+            add("Open-space analysis (1″ grid)", "$spMs ms · ${Units.area(sp.usableArea)} usable · ${sp.corridors.size} walkways")
+            val (nudges, nuMs) = timed { MicroNudge.suggest(room, room.furniture) }
+            add("Micro-nudges", "$nuMs ms · ${nudges.size} found" + (nudges.firstOrNull()?.let { " · best: ${it.detail}" } ?: ""))
+            val (res, optMs) = timed { LayoutOptimizer(room, SpaceGoal.MAX_OPEN_CENTER, 7L).optimize(room.furniture) }
+            add("Optimizer (demo, max open center)", "$optMs ms · ${Units.areaGain(res.space?.usableGain ?: 0f)} usable floor · openness ${res.before.score} → ${res.after.score}")
             val (_, sunMs) = timed { SunModel.simulate(room, res.layout, Season.TODAY, 14f) }
             add("Sunlight day simulation", "$sunMs ms")
             val (_, mirMs) = timed { OpenLook.mirrorSpots(room, res.layout) }
@@ -133,7 +137,7 @@ fun DeviceCheckScreen(onBack: () -> Unit, probeAr: Boolean = true) {
         running = false
     }
 
-    val report = remember(rows) { "OpenRoom AI device check\n" + rows.joinToString("\n") { (k, v) -> "$k: $v" } }
+    val report = remember(rows) { "$APP_NAME device check\n" + rows.joinToString("\n") { (k, v) -> "$k: $v" } }
 
     LazyColumn(Modifier.fillMaxSize().background(Palette.Bg), contentPadding = PaddingValues(bottom = 40.dp)) {
         item {
@@ -159,7 +163,7 @@ fun DeviceCheckScreen(onBack: () -> Unit, probeAr: Boolean = true) {
         item {
             Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = {
-                    (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("OpenRoom device check", report))
+                    (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("$APP_NAME device check", report))
                 }, enabled = !running, modifier = Modifier.weight(1f).height(50.dp)) { Text("Copy report") }
                 Button(onClick = {
                     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, report) }, "Share device check"))

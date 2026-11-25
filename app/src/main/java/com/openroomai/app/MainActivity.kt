@@ -65,9 +65,10 @@ class MainActivity : ComponentActivity() {
 private fun App(vm: AppViewModel, ar: ArController) {
     val ctx = LocalContext.current
     val rooms by vm.rooms.collectAsStateWithLifecycle()
+    val stats by vm.stats.collectAsStateWithLifecycle()
     var pendingAr by remember { mutableStateOf<Screen?>(null) }
     val prefs = remember { ctx.getSharedPreferences("openroom", android.content.Context.MODE_PRIVATE) }
-    // Big text for older eyes: scales every text in the app by 30 %.
+    // Large text: scales every text in the app by 30 %.
     var bigText by remember { mutableStateOf(prefs.getBoolean("big_text", false)) }
     val baseDensity = androidx.compose.ui.platform.LocalDensity.current
 
@@ -84,7 +85,7 @@ private fun App(vm: AppViewModel, ar: ArController) {
         val target = pendingAr
         pendingAr = null
         if (granted && target != null) vm.go(target)
-        else if (!granted) Toast.makeText(ctx, "Camera access is needed to scan. Sketch mode works without it.", Toast.LENGTH_LONG).show()
+        else if (!granted) Toast.makeText(ctx, "Scanning needs the camera. Sketch by size works without it.", Toast.LENGTH_LONG).show()
     }
 
     fun withCamera(target: Screen) {
@@ -101,6 +102,8 @@ private fun App(vm: AppViewModel, ar: ArController) {
     androidx.compose.runtime.CompositionLocalProvider(
         androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(baseDensity.density, baseDensity.fontScale * if (bigText) 1.3f else 1f),
     ) {
+    // Every measurement on screen is formatted at draw time: re-key on the unit system.
+    androidx.compose.runtime.key(vm.units) {
     Box(Modifier.fillMaxSize().background(Palette.Bg)) {
         AnimatedContent(vm.screen, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "screens") { s ->
             when (s) {
@@ -115,6 +118,11 @@ private fun App(vm: AppViewModel, ar: ArController) {
                     bigText = bigText,
                     onToggleBigText = { bigText = !bigText; prefs.edit().putBoolean("big_text", bigText).apply() },
                     onDeviceCheck = { vm.go(Screen.DeviceCheck) },
+                    stats = stats,
+                    imperial = vm.units == com.openroomai.app.engine.Units.System.IMPERIAL,
+                    onToggleUnits = {
+                        vm.changeUnits(if (vm.units == com.openroomai.app.engine.Units.System.IMPERIAL) com.openroomai.app.engine.Units.System.METRIC else com.openroomai.app.engine.Units.System.IMPERIAL)
+                    },
                 )
                 Screen.Scan -> ScanScreen(ar, onDone = { vm.saveScanned(it) }, onBack = { vm.back() })
                 Screen.Plan -> PlanScreen(vm, arSupported, onBack = { vm.back() }, onPreview = { withCamera(Screen.Preview) }, onOpen3D = { vm.go(Screen.ThreeD) }, onOpenMoving = { vm.refresh(); vm.go(Screen.Moving) },
@@ -135,6 +143,7 @@ private fun App(vm: AppViewModel, ar: ArController) {
                 }
             }
         }
+    }
     }
 }
 }

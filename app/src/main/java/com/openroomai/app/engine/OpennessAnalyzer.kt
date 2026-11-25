@@ -11,10 +11,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** Person-sized clearance radii (meters, measured from walkway center to the nearest obstacle). */
-const val SQUEEZE_RADIUS = 0.3f   // 60 cm: you can pass sideways
-const val COMFORT_RADIUS = 0.45f  // 90 cm: a comfortable walkway (and wheelchair minimum)
-const val TURNING_DIAMETER = 1.5f // wheelchair turning circle
+/** Lane half-widths (meters, from the middle of a walkway to the nearest obstacle). */
+const val SQUEEZE_RADIUS = 0.3f   // 24″ lane: you can get by
+const val COMFORT_RADIUS = 0.457f // 36″ lane: clear, comfortable flow
 
 data class FlowPath(val target: Furniture, val points: List<Vec2>, val minWidth: Float)
 
@@ -34,15 +33,11 @@ data class OpennessReport(
     /** Heatmap: per-cell distance to obstacles (m), with geometry to draw it. */
     val grid: OccupancyGrid,
     val visible: BooleanArray,
-    /** Clearance radius used for "walkable" (0.3 normally, 0.45 for wheelchair goal). */
+    /** Clearance radius that counts as "walkable". */
     val walkRadius: Float = SQUEEZE_RADIUS,
 ) {
-    val turningCircleOk get() = clearDiameter >= TURNING_DIAMETER
-
     val label: String
         get() = when {
-            // The kids' favourite number. Its meaning is that it has no meaning — like a 67 room: perfectly mid.
-            score == 67 -> "Six… seven 🤲"
             score >= 85 -> "Airy ✨"
             score >= 70 -> "Open"
             score >= 55 -> "Comfortable"
@@ -108,13 +103,13 @@ object OpennessAnalyzer {
         // 3) Can you get to the usable side of every piece?
         val flows = ArrayList<FlowPath>()
         val blockedPieces = ArrayList<Furniture>()
-        var accessible = 0
+        var reachableCount = 0
         val tight = LinkedHashSet<Int>()
         for (f in layout) {
-            if (!f.type.needsAccess) { accessible++; continue }
+            if (!f.type.needsAccess) { reachableCount++; continue }
             val target = f.accessPoints().map { nearestReached(g, it, parent, walkRadius + 0.3f) }.firstOrNull { it >= 0 } ?: -1
             if (target >= 0) {
-                accessible++
+                reachableCount++
                 if (withFlows) {
                     val pts = ArrayList<Vec2>()
                     var c = target
@@ -130,7 +125,7 @@ object OpennessAnalyzer {
                 }
             } else blockedPieces.add(f)
         }
-        val accessPct = if (layout.isEmpty()) 1f else accessible.toFloat() / layout.size
+        val accessPct = if (layout.isEmpty()) 1f else reachableCount.toFloat() / layout.size
 
         // 4) Sightlines: how much floor you see from the doorway past tall furniture.
         val visible = BooleanArray(n)

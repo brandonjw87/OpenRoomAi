@@ -182,7 +182,7 @@ fun Room3DScreen(
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             report?.let { r ->
                 val msg = when (view) {
-                    Viewpoint.Dollhouse -> "Open heart of the room: ${"%.1f".format(r.clearDiameter)} m across (green ring)"
+                    Viewpoint.Dollhouse -> "Open heart of the room: ${com.openroomai.app.engine.Units.len(r.clearDiameter)} across (green ring)"
                     Viewpoint.Door -> "First impression: you see ${(r.visibilityPct * 100).roundToInt()}% of the floor from the door"
                     is Viewpoint.Seat -> "This is your view from the ${view.label.substringAfter("From your ").lowercase()}"
                 }

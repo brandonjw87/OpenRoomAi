@@ -47,7 +47,7 @@ class EngineTest {
     fun optimizerImprovesDemoRoomAndIsValid() {
         val room = RoomRepository.demoRoom()
         val t0 = System.currentTimeMillis()
-        val res = LayoutOptimizer(room, Effort.BALANCED).optimize(room.furniture)
+        val res = LayoutOptimizer(room, SpaceGoal.WIDEST_FLOW).optimize(room.furniture)
         val ms = System.currentTimeMillis() - t0
         println("blocked: " + res.after.blockedPieces.map { it.name } + " clear=" + res.after.clearDiameter + " vis=" + res.after.visibilityPct + " reach=" + res.after.reachablePct + " light=" + res.after.lightPct)
         println("demo: ${res.before.score} -> ${res.after.score} in ${ms}ms, violations=${res.violations}")
@@ -73,7 +73,7 @@ class EngineTest {
                 Furniture(type = FurnitureType.DESK, center = Vec2(1.7f, 3.2f), rotationDeg = 180f),
             ),
         )
-        val res = LayoutOptimizer(room, Effort.REDESIGN).optimize(room.furniture)
+        val res = LayoutOptimizer(room, SpaceGoal.MAX_OPEN_CENTER).optimize(room.furniture)
         println("bedroom: ${res.before.score} -> ${res.after.score}, violations=${res.violations}")
         assertTrue(res.after.score >= res.before.score)
     }
@@ -83,7 +83,7 @@ class EngineTest {
         val room = RoomRepository.demoRoom()
         val scores = ArrayList<Int>()
         for (seed in 1L..6L) {
-            val res = LayoutOptimizer(room, Effort.BALANCED, seed).optimize(room.furniture)
+            val res = LayoutOptimizer(room, SpaceGoal.WIDEST_FLOW, seed).optimize(room.furniture)
             val steps = MovePlanner.plan(room, room.furniture, res.layout)
             scores += res.after.score
             assertTrue("seed $seed: ${steps.size} steps", steps.size <= room.furniture.size * 2)
@@ -97,16 +97,13 @@ class EngineTest {
     fun goalsShapeTheLayout() {
         val room = RoomRepository.demoRoom()
         for (g in LayoutGoal.entries) {
-            val res = LayoutOptimizer(room, Effort.BALANCED, 7L, g).optimize(room.furniture)
+            val res = LayoutOptimizer(room, SpaceGoal.WIDEST_FLOW, 7L, g).optimize(room.furniture)
             println("goal ${g.name}: ${res.before.score} -> ${res.after.score} clear=${"%.2f".format(res.after.clearDiameter)} fits=${res.fits}")
             assertTrue("${g.name} ${res.violations}", res.fits)
             assertTrue(g.name, res.after.score >= res.before.score)
         }
-        val party = LayoutOptimizer(room, Effort.BALANCED, 7L, LayoutGoal.PARTY).optimize(room.furniture)
-        assertTrue("party clear ${party.after.clearDiameter}", party.after.clearDiameter >= 2.0f)
-        val wheel = LayoutOptimizer(room, Effort.BALANCED, 7L, LayoutGoal.ACCESSIBLE).optimize(room.furniture)
-        assertEquals(COMFORT_RADIUS, wheel.after.walkRadius, 1e-6f)
-        assertTrue("turning circle ${wheel.after.clearDiameter}", wheel.after.turningCircleOk)
+        val party = LayoutOptimizer(room, SpaceGoal.MAX_OPEN_CENTER, 7L, LayoutGoal.PARTY).optimize(room.furniture)
+        assertTrue("entertaining clear ${party.after.clearDiameter}", party.after.clearDiameter >= 2.0f)
     }
 
     @Test
@@ -129,7 +126,7 @@ class EngineTest {
     fun designGuidelinesImproveWithOptimization() {
         val room = RoomRepository.demoRoom()
         val before = DesignGuidelines.check(room, room.furniture)
-        val res = LayoutOptimizer(room, Effort.BALANCED, 11L).optimize(room.furniture)
+        val res = LayoutOptimizer(room, SpaceGoal.WIDEST_FLOW, 11L).optimize(room.furniture)
         val after = DesignGuidelines.check(room, res.layout)
         println("design check: ${before.score} -> ${after.score} (conv ${before.conversation}->${after.conversation}, balance ${before.imbalance}->${after.imbalance}, align ${before.alignment}->${after.alignment}, emph ${before.emphasis}->${after.emphasis})")
         assertTrue(after.score > before.score)

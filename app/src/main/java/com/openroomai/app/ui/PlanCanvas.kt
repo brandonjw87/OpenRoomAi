@@ -20,7 +20,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -35,11 +34,15 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import com.openroomai.app.engine.COMFORT_RADIUS
+import com.openroomai.app.engine.Lanes
+import com.openroomai.app.engine.Nudge
 import com.openroomai.app.engine.OccupancyGrid
+import com.openroomai.app.engine.OpenSpaceReport
 import com.openroomai.app.engine.OpennessReport
 import com.openroomai.app.engine.SQUEEZE_RADIUS
 import com.openroomai.app.engine.SunModel
 import com.openroomai.app.engine.SunReport
+import com.openroomai.app.engine.Units
 import com.openroomai.app.model.Furniture
 import com.openroomai.app.model.Geo
 import com.openroomai.app.model.OpeningType
@@ -50,10 +53,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 data class Layers(
-    val heatmap: Boolean = true,
-    val flows: Boolean = false,
+    /** Clearance map: how much room there is around every spot. */
+    val heatmap: Boolean = false,
+    /** Walkways from the door, banded by clear width. */
+    val flows: Boolean = true,
     val sightlines: Boolean = false,
-    val openCircle: Boolean = true,
+    /** The largest contiguous open zone, with its size. */
+    val openZone: Boolean = true,
     val labels: Boolean = true,
     val sunlight: Boolean = false,
     /** Sunlight layer: whole-day sun hours instead of the selected moment. */
@@ -133,8 +139,10 @@ fun PlanCanvas(
     sun: SunReport? = null,
     /** Open-Look Studio suggestions, drawn as numbered dashed panes. */
     mirrorSpots: List<com.openroomai.app.engine.MirrorSpot> = emptyList(),
-    /** Easy-living overlay: night path, night lights, narrow spots, trip pieces. */
-    safety: com.openroomai.app.engine.FallSafetyReport? = null,
+    /** Open zone and walkways for [layout]. */
+    space: OpenSpaceReport? = null,
+    /** A micro-nudge being previewed: [layout] already has it applied, [ghost] is the room today. */
+    nudge: Nudge? = null,
     ghost: List<Furniture>? = null,
     selectedId: String? = null,
     highlightId: String? = null,
@@ -182,8 +190,8 @@ fun PlanCanvas(
                     drag(start.id) { change ->
                         change.consume()
                         val p = tr.toPlan(change.position) + grab
-                        // Snap to 5 cm so things line up nicely.
-                        onMoveS(hit.id, Vec2((p.x * 20f).roundToInt() / 20f, (p.y * 20f).roundToInt() / 20f))
+                        // Snap to whole inches (or centimeters) so measurements stay clean.
+                        onMoveS(hit.id, Vec2(Units.snap(p.x), Units.snap(p.y)))
                     }
                 }
             }
@@ -191,10 +199,9 @@ fun PlanCanvas(
 
     Canvas(modifier.then(gestureMod)) {
         val tr = PlanTransform(room, size, pad)
-        drawPlan(this, tr, room, layout, report, layers, ghost, selectedId, highlightId, heat, sight, measurer, compact)
+        drawPlan(this, tr, room, layout, report, layers, ghost, selectedId, highlightId, heat, sight, measurer, compact, space, nudge)
         if (sunImg != null && sun != null) drawSun(tr, room, sun, sunImg, layers.sunHours, measurer)
         drawMirrors(tr, room, mirrorSpots, measurer, compact)
-        if (safety != null && !compact) drawSafety(tr, room, layout, safety, measurer)
         if (!compact && room.northDeg != null) drawCompass(room.northDeg, measurer)
     }
 }
@@ -213,6 +220,8 @@ fun drawPlan(
     sight: ImageBitmap?,
     measurer: TextMeasurer,
     compact: Boolean,
+    space: OpenSpaceReport? = null,
+    nudge: Nudge? = null,
 ) = with(ds) {
     val s = tr.scale
     val outline = room.outline.map { tr.toScreen(it) }
@@ -249,16 +258,13 @@ fun drawPlan(
             drawCircle(Palette.Amber, 7f, e)
             drawCircle(Palette.Amber.copy(alpha = 0.3f), 18f, e)
         }
-        if (layers.openCircle && report.clearDiameter > 0.3f) {
-            val c = tr.toScreen(report.clearCenter)
-            val r = report.clearDiameter / 2f * s
-            drawCircle(Palette.Mint.copy(alpha = 0.10f), r, c)
-            drawCircle(Palette.Mint, r, c, style = Stroke(2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
-            if (!compact) {
-                val t = measurer.measure("${"%.1f".format(report.clearDiameter)} m open", TextStyle(color = Palette.Mint, fontSize = 11.sp, fontWeight = FontWeight.Bold))
-                drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - r + 8f)) // inside the ring: clear of wall labels
-            }
-        }
+    }
+    // The largest open zone: one consolidated rectangle of floor, with its size.
+    val zone = space?.zone
+    if (layers.openZone && zone != null) {
+        val pts = zone.corners().map { tr.toScreen(it) }
+        drawPath(polyPath(pts), Palette.Mint.copy(alpha = 0.13f))
+        drawPath(polyPath(pts), Palette.Mint, style = Stroke(2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
     }
 
     // Walls.
@@ -296,29 +302,26 @@ fun drawPlan(
         }
     }
 
-    // Walk paths.
-    if (layers.flows && report != null) {
-        for (f in report.flows) {
-            if (f.points.size < 2) continue
-            val path = Path().apply {
-                val p0 = tr.toScreen(f.points[0]); moveTo(p0.x, p0.y)
-                for (k in 1 until f.points.size) { val p = tr.toScreen(f.points[k]); lineTo(p.x, p.y) }
-            }
-            val col = if (f.minWidth >= 2 * COMFORT_RADIUS) Palette.Violet else Palette.Amber
-            drawPath(path, col.copy(alpha = 0.85f), style = Stroke(3f, cap = StrokeCap.Round, join = StrokeJoin.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 9f))))
-        }
-        for (p in report.tightSpots) drawCircle(Palette.Coral.copy(alpha = 0.5f), 3f, tr.toScreen(p))
-    }
+    // Flow: every walkway from the door, banded by its real clear width and coloured by tier.
+    if (layers.flows && space != null && !compact) drawFlow(tr, space, measurer)
 
     // Ghosts: current positions + arrows.
+    // Small moves (a few inches) get a readable arrow + distance once the furniture is drawn.
+    val smallMoves = ArrayList<Pair<Furniture, Furniture>>()
     if (ghost != null) {
         val target = layout.associateBy { it.id }
+        val nudged = nudge?.ids ?: emptySet()
         for (g in ghost) {
             val t = target[g.id] ?: continue
-            if (g.center.dist(t.center) < 0.08f && kotlin.math.abs(g.rotationDelta(t)) < 5f) continue
+            val d = g.center.dist(t.center)
+            val rot = kotlin.math.abs(g.rotationDelta(t))
+            if (d < 0.006f && rot < 2f && g.id !in nudged) continue
             val p = polyPath(g.corners().map { tr.toScreen(it) })
-            drawPath(p, Palette.Coral.copy(alpha = 0.8f), style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))))
-            drawArrow(tr.toScreen(g.center), tr.toScreen(t.center), Palette.Coral.copy(alpha = 0.8f))
+            val small = g.id in nudged || d < 0.3f
+            val col = if (small) Palette.Amber else Palette.Coral
+            drawPath(p, col.copy(alpha = 0.85f), style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))))
+            if (small) smallMoves += g to t
+            else drawArrow(tr.toScreen(g.center), tr.toScreen(t.center), col.copy(alpha = 0.8f))
         }
     }
 
@@ -326,7 +329,7 @@ fun drawPlan(
     for (f in layout) {
         val pts = f.corners().map { tr.toScreen(it) }
         val base = Color(f.displayArgb)
-        val sel = f.id == selectedId || f.id == highlightId
+        val sel = f.id == selectedId || f.id == highlightId || (nudge != null && f.id in nudge.ids)
         drawPath(polyPath(pts), base.copy(alpha = if (sel) 0.95f else 0.75f))
         drawPath(polyPath(pts), if (sel) Color.White else base, style = Stroke(if (sel) 4f else 2f))
         // Front edge = the side you use.
@@ -346,6 +349,19 @@ fun drawPlan(
             }
         }
     }
+    // The zone's size goes on top of everything, so flow lines never hide it.
+    if (layers.openZone && zone != null && !compact) {
+        val c = tr.toScreen(zone.center)
+        val l1 = measurer.measure(Units.dims(zone.long, zone.short), TextStyle(color = Palette.Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+        val l2 = measurer.measure("open zone · ${Units.area(zone.area)}", TextStyle(color = Palette.Mint.copy(alpha = 0.9f), fontSize = 10.sp))
+        val wPill = maxOf(l1.size.width, l2.size.width) + 16f
+        val hPill = (l1.size.height + l2.size.height).toFloat() + 8f
+        drawRoundRect(Color.Black.copy(alpha = 0.55f), topLeft = Offset(c.x - wPill / 2f, c.y - hPill / 2f), size = Size(wPill, hPill), cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f))
+        val top = c.y - hPill / 2f + 4f
+        drawText(l1, topLeft = Offset(c.x - l1.size.width / 2f, top))
+        drawText(l2, topLeft = Offset(c.x - l2.size.width / 2f, top + l1.size.height))
+    }
+    if (!compact) for ((g, t) in smallMoves) drawNudgeArrow(tr, g, t, measurer)
 }
 
 private fun polyPath(pts: List<Offset>) = Path().apply {
@@ -434,36 +450,74 @@ private fun DrawScope.drawMirrors(tr: PlanTransform, room: Room, spots: List<com
     }
 }
 
-/** Night path (warm dashes), 💡 night lights, red rings where paths pinch, orange outlines on trip pieces. */
-private fun DrawScope.drawSafety(tr: PlanTransform, room: Room, layout: List<Furniture>, rep: com.openroomai.app.engine.FallSafetyReport, measurer: TextMeasurer) {
-    // Desire lines from the door, faint, so people see where "straight" is.
-    for ((_, line) in com.openroomai.app.engine.FallSafety.desireLines(room, layout)) {
-        drawLine(Color.White.copy(alpha = 0.18f), tr.toScreen(line.a), tr.toScreen(line.b), strokeWidth = 3f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 10f)))
-    }
-    if (rep.nightPath.size >= 2) {
-        val path = Path().apply {
-            val p0 = tr.toScreen(rep.nightPath[0]); moveTo(p0.x, p0.y)
-            for (k in 1 until rep.nightPath.size) { val p = tr.toScreen(rep.nightPath[k]); lineTo(p.x, p.y) }
+/**
+ * Walkways: a coloured centre line everywhere, plus a band at the lane's real clear width only
+ * where it's under 44″, so the tight stretches stand out and open floor stays uncluttered.
+ */
+private fun DrawScope.drawFlow(tr: PlanTransform, space: OpenSpaceReport, measurer: TextMeasurer) {
+    val s = tr.scale
+    val lanes = space.lanes.filter { it.path.size >= 2 }
+    // One smooth band per run of same-tier tight segments (a single stroked path never
+    // double-paints its own joints), as wide as the narrowest point of that run.
+    for (c in lanes) {
+        var k = 1
+        while (k < c.path.size) {
+            val tier = Lanes.tier(minOf(c.widths[k - 1], c.widths[k]))
+            if (tier == com.openroomai.app.engine.Tier.WIDE) { k++; continue }
+            val run = Path()
+            val p0 = tr.toScreen(c.path[k - 1]); run.moveTo(p0.x, p0.y)
+            var narrowest = Float.MAX_VALUE
+            while (k < c.path.size && Lanes.tier(minOf(c.widths[k - 1], c.widths[k])) == tier) {
+                narrowest = minOf(narrowest, c.widths[k - 1], c.widths[k])
+                val p = tr.toScreen(c.path[k]); run.lineTo(p.x, p.y)
+                k++
+            }
+            drawPath(
+                run, tierColor(tier).copy(alpha = 0.2f),
+                style = Stroke((narrowest * s).coerceAtLeast(4f), cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+            )
         }
-        drawPath(path, NightGlow.copy(alpha = 0.25f), style = Stroke(18f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawPath(path, NightGlow, style = Stroke(4f, cap = StrokeCap.Round, join = StrokeJoin.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
     }
-    for (f in layout.filter { it.name in rep.tripPieces }) {
-        val pts = f.corners().map { tr.toScreen(it) }
-        val p = Path().apply { moveTo(pts[0].x, pts[0].y); for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y); close() }
-        drawPath(p, Color(0xFFFF8A3D), style = Stroke(6f))
+    for (c in lanes) for (k in 1 until c.path.size) {
+        val w = minOf(c.widths[k - 1], c.widths[k])
+        val col = tierColor(Lanes.tier(w))
+        drawLine(if (w >= Lanes.GENEROUS) col.copy(alpha = 0.75f) else col, tr.toScreen(c.path[k - 1]), tr.toScreen(c.path[k]), strokeWidth = 3.5f, cap = StrokeCap.Round)
     }
-    // One ring per reported fix, so every ring on the plan has an explanation in the card.
-    for (p in rep.items.filter { it.icon == "↔️" }.mapNotNull { it.at }) {
-        val c = tr.toScreen(p)
-        drawCircle(Palette.Coral.copy(alpha = 0.25f), 20f, c)
-        drawCircle(Palette.Coral, 20f, c, style = Stroke(3f))
+    // Where each lane hits its narrowest, if that's under 36″.
+    for (p in space.pinches) {
+        val c = tr.toScreen(p.at)
+        val col = tierColor(Lanes.tier(p.width))
+        drawCircle(col.copy(alpha = 0.25f), 17f, c)
+        drawCircle(col, 17f, c, style = Stroke(3f))
+        val t = measurer.measure(Units.width(p.width), TextStyle(color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black))
+        val box = Offset(c.x - t.size.width / 2f - 6f, c.y - 17f - t.size.height - 6f)
+        drawRoundRect(col, topLeft = box, size = Size(t.size.width + 12f, t.size.height + 4f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f))
+        drawText(t, topLeft = Offset(box.x + 6f, box.y + 2f))
     }
-    for (l in rep.nightLights) {
-        val c = tr.toScreen(l.at)
-        drawCircle(NightGlow.copy(alpha = 0.35f), 22f, c)
-        val t = measurer.measure("💡", TextStyle(fontSize = 15.sp))
-        drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - t.size.height / 2f))
+}
+
+/** A micro-nudge is a few inches: draw a readable arrow (at least ~36 px) plus the distance. */
+private fun DrawScope.drawNudgeArrow(tr: PlanTransform, from: Furniture, to: Furniture, measurer: TextMeasurer) {
+    val move = to.center - from.center
+    val d = move.length()
+    val rot = from.rotationDelta(to)
+    val c = tr.toScreen(to.center)
+    if (d > 0.004f) {
+        val dir = move / d
+        val edge = minOf(to.width, to.depth) / 2f * tr.scale
+        val start = Offset(c.x + dir.x * edge * 0.2f, c.y + dir.y * edge * 0.2f)
+        val len = maxOf(36f, d * tr.scale) + edge * 0.6f
+        val end = Offset(start.x + dir.x * len, start.y + dir.y * len)
+        drawArrow(start, end, Palette.Amber)
+        val t = measurer.measure(Units.nudge(d), TextStyle(color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Black))
+        val box = Offset(end.x - t.size.width / 2f - 6f, end.y + 6f)
+        drawRoundRect(Palette.Amber, topLeft = box, size = Size(t.size.width + 12f, t.size.height + 4f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f))
+        drawText(t, topLeft = Offset(box.x + 6f, box.y + 2f))
+    }
+    if (kotlin.math.abs(rot) > 5f) {
+        val t = measurer.measure("↻ ${kotlin.math.abs(rot).roundToInt()}°", TextStyle(color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Black))
+        val box = Offset(c.x - t.size.width / 2f - 6f, c.y - t.size.height / 2f - 2f)
+        drawRoundRect(Palette.Amber, topLeft = box, size = Size(t.size.width + 12f, t.size.height + 4f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f))
+        drawText(t, topLeft = Offset(box.x + 6f, box.y + 2f))
     }
 }

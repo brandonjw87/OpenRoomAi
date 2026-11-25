@@ -1,6 +1,7 @@
 package com.openroomai.app.model
 
 import com.openroomai.app.engine.LayoutGoal
+import com.openroomai.app.engine.SpaceGoal
 import kotlinx.serialization.Serializable
 import java.util.UUID
 import kotlin.math.PI
@@ -166,8 +167,10 @@ data class Room(
     val scannedInAr: Boolean = false,
     /** Identifies the AR session the coordinates came from; a different session needs re-alignment. */
     val arSessionToken: String = "",
-    /** What the room is optimized for (movie night, work from home, …). */
+    /** What the room is used for (movie night, work from home, …). */
     val goal: LayoutGoal = LayoutGoal.EVERYDAY,
+    /** The space goal last used to plan this room. */
+    val space: SpaceGoal = SpaceGoal.MAX_OPEN_CENTER,
     /** Compass bearing (° clockwise from north) of the plan's "up" (−Y) direction; null = unknown. */
     val northDeg: Float? = null,
     /** Latitude for sun simulation; null = not set (a default is used). */

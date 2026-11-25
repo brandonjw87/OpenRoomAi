@@ -138,7 +138,7 @@ fun MovingScreen(vm: AppViewModel, onBack: () -> Unit) {
                         val noDoor = picked.filter { Delivery.check(it, doorW, doorH).method == DeliveryMethod.NO_FIT }
                         if (noDoor.isNotEmpty()) Text("⚠️ It fits in the room, but ${noDoor.joinToString { it.name }} won't get through a ${MovePlanner.fmt(doorW)} door — see the delivery check below.", color = Palette.Amber)
                         Box(Modifier.fillMaxWidth().aspectRatio(1.15f).clip(RoundedCornerShape(16.dp)).background(Palette.Bg)) {
-                            PlanCanvas(room, res.layout, res.after, Modifier.fillMaxSize(), layers = Layers(heatmap = true, openCircle = true))
+                            PlanCanvas(room, res.layout, res.after, Modifier.fillMaxSize(), layers = Layers(flows = false), space = res.space?.after)
                         }
                         Text("Dashed amber = moving in.", color = Palette.Muted)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

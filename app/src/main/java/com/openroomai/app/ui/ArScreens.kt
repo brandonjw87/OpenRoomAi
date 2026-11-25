@@ -187,7 +187,7 @@ fun ScanScreen(controller: ArController, onDone: (Room) -> Unit, onBack: () -> U
             }
             MessagePill(error ?: st.message, warn = error != null || !st.tracking)
             if (st.depthSupported && st.step == ScanStep.FURNITURE) {
-                MessagePill("Depth sensing on · ${"%.1f".format(st.coverage)} m² mapped")
+                MessagePill("Depth sensing on · ${com.openroomai.app.engine.Units.area(st.coverage)} mapped")
             }
             if (st.step == ScanStep.FURNITURE && st.visionReady) {
                 MessagePill(
@@ -274,8 +274,8 @@ fun ScanScreen(controller: ArController, onDone: (Room) -> Unit, onBack: () -> U
 private fun ScanStats(st: ArUiState) {
     val txt = when (st.step) {
         ScanStep.FLOOR -> "Looking for the floor…"
-        ScanStep.OUTLINE -> "${st.corners} corners" + (if (st.perimeter > 0) " · ${"%.1f".format(st.perimeter)} m walls" else "") + (if (st.area > 0) " · ${"%.1f".format(st.area)} m²" else "")
-        ScanStep.OPENINGS -> "${st.openings.count { it.type == OpeningType.DOOR }} doors · ${st.openings.count { it.type == OpeningType.WINDOW }} windows · ${"%.1f".format(st.area)} m² room"
+        ScanStep.OUTLINE -> "${st.corners} corners" + (if (st.perimeter > 0) " · ${com.openroomai.app.engine.Units.len(st.perimeter)} of wall" else "") + (if (st.area > 0) " · ${com.openroomai.app.engine.Units.area(st.area)}" else "")
+        ScanStep.OPENINGS -> "${st.openings.count { it.type == OpeningType.DOOR }} doors · ${st.openings.count { it.type == OpeningType.WINDOW }} windows · ${com.openroomai.app.engine.Units.area(st.area)} room"
         ScanStep.FURNITURE -> "${st.detected.size} pieces detected · ${st.manual.size} added by hand"
         else -> ""
     }
@@ -371,7 +371,7 @@ fun PlaceScreen(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
                 }
                 Spacer(Modifier.width(10.dp))
-                Text("${item.type.emoji} ${item.name} · ${(item.width * 100).toInt()}×${(item.depth * 100).toInt()} cm", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                Text("${item.type.emoji} ${item.name} · ${com.openroomai.app.engine.Units.dims(item.width, item.depth)}", color = Color.White, style = MaterialTheme.typography.titleMedium)
             }
             MessagePill(error ?: st.message, warn = error != null || !st.tracking)
             if (st.step == ScanStep.PLACE && st.placeStatus.isNotEmpty()) {

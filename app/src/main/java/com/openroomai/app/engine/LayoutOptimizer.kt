@@ -5,26 +5,25 @@ import com.openroomai.app.model.FurnitureType
 import com.openroomai.app.model.Geo
 import com.openroomai.app.model.Room
 import com.openroomai.app.model.Vec2
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
-
-enum class Effort(val label: String, val blurb: String, val movePenalty: Float, val iterations: Int) {
-    LIGHT("Quick tidy", "Few, short moves", 1.2f, 3500),
-    BALANCED("Balanced", "Best bang for the sweat", 0.35f, 7000),
-    REDESIGN("Full redesign", "Anything goes", 0.04f, 11000),
-}
 
 data class OptimizeResult(
     val layout: List<Furniture>,
     val before: OpennessReport,
     val after: OpennessReport,
     val violations: List<String>,
+    /** Usable floor, open zone and walkway widths before and after (1″ grid). */
+    val space: SpaceDiff? = null,
+    val spaceGoal: SpaceGoal = SpaceGoal.MAX_OPEN_CENTER,
+    /** The small adjustments that make up a Quick Wins plan (or polished the result). */
+    val nudges: List<Nudge> = emptyList(),
 ) {
     val fits get() = violations.isEmpty()
 }
@@ -33,13 +32,14 @@ data class OptimizeResult(
  * Simulated-annealing furniture arranger.
  *
  * Hard rules (heavily penalised): stay inside the room, no overlaps, keep door swings clear,
- * keep each piece's "use zone" clear. Soft goals: backs to walls where it makes sense, sensible
+ * keep each piece's use zone clear. Soft goals: backs to walls where it makes sense, sensible
  * groupings (sofa faces TV, coffee table in reach, nightstands by the bed, desk near daylight),
- * minimal sweat, and above all a high openness score.
+ * minimal effort, and above all open space: a big contiguous open zone, lots of usable floor,
+ * and wide walkways to everything, weighted by the chosen [SpaceGoal].
  */
 class LayoutOptimizer(
     private val room: Room,
-    private val effort: Effort = Effort.BALANCED,
+    private val space: SpaceGoal = SpaceGoal.MAX_OPEN_CENTER,
     seed: Long = 42L,
     private val goal: LayoutGoal = LayoutGoal.EVERYDAY,
 ) {
@@ -51,23 +51,26 @@ class LayoutOptimizer(
      */
     var designWeight = 0f
     /** Weight of the design guidelines when picking the best of the finished candidates. */
-    var selectWeight = 1.0f
+    var selectWeight = 1.6f
+    /** Finish with a few micro-nudges (off in some tests to see the raw search). */
+    var polish = true
     private val rnd = Random(seed)
-    private val walls = room.walls()
-    private val normals = walls.indices.map { room.inwardNormal(it) }
-    private val doorSwings = room.doors().map { room.doorSwing(it) }
-    private val windowZones = room.windows().map { w ->
-        val s = room.openingSegment(w)
-        val n = room.inwardNormal(w.wallIndex)
-        listOf(s.a, s.b, s.b + n * 0.5f, s.a + n * 0.5f)
-    }
+    private val cons = Constraints(room)
+    private val walls = cons.walls
+    private val normals = cons.normals
+    private val frameDeg = RoomFrame.of(room).angleDeg
     private val grid = OccupancyGrid(room, 0.1f)
+    private val meter by lazy { OpenSpace.Meter(room, 0.1f) }
     /** Today's hourly sun positions, only when we know which way the room faces. */
     private val sunTimes: List<SunPos> = if (room.northDeg == null || room.windows().isEmpty()) emptyList() else {
         val day = SunModel.dayOf(Season.TODAY)
         (5..19).map { SunModel.position(room.latitude ?: DEFAULT_LATITUDE, day, it + 0.5f) }.filter { it.up }
     }
     private val fineGrid by lazy { OccupancyGrid(room, 0.05f) }
+    private val fineMeter by lazy { OpenSpace.Meter(room, 0.05f) }
+
+    /** Iterations and effort cost: Quick Wins with brand-new pieces still needs a (light) search. */
+    private val iterations = if (space == SpaceGoal.QUICK_WINS) 3500 else space.iterations
 
     /**
      * @param start layout to begin from (may include brand-new pieces).
@@ -79,29 +82,39 @@ class LayoutOptimizer(
         onProgress: (Float) -> Unit = {},
     ): OptimizeResult {
         val before = OpennessAnalyzer.analyze(room, reference, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
-        if (start.isEmpty()) return OptimizeResult(start, before, before, emptyList())
+        if (start.isEmpty()) return OptimizeResult(start, before, before, emptyList(), spaceGoal = space)
+
+        // Quick Wins: a short chain of the best micro-nudges, no redesign.
+        val hasNew = start.any { s -> reference.none { it.id == s.id } }
+        if (space == SpaceGoal.QUICK_WINS && !hasNew) {
+            onProgress(0.1f)
+            val chain = MicroNudge.chain(room, start, SpaceGoal.QUICK_WINS, maxMoves = 4)
+            val layout = MicroNudge.applyAll(start, chain)
+            onProgress(0.9f)
+            return finish(reference, layout, before, chain, onProgress)
+        }
 
         // Several independent searches from different starts (fast 10 cm grid), each refined cold,
-        // run in parallel — one per CPU core, at least 4. Candidates are then judged on the same
-        // fine 5 cm grid the final report uses, so a gap that only "exists" coarsely can't win.
+        // run in parallel — one per CPU core, at least 4. Candidates are then judged on the finer
+        // 5 cm grid, so a gap that only "exists" coarsely can't win.
         val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
         val chains = cores.coerceIn(4, 8)
-        val explore = (effort.iterations * 0.55f).toInt()
-        val refine = effort.iterations / 5
+        val explore = (iterations * 0.55f).toInt()
+        val refine = iterations / 5
         val total = chains.toLong() * (explore + refine)
         val done = AtomicLong(0)
         val progressLock = Any()
         val tick: (Int) -> Unit = { n ->
             val d = done.addAndGet(n.toLong())
-            synchronized(progressLock) { onProgress((d.toFloat() / total * 0.95f).coerceAtMost(0.95f)) }
+            synchronized(progressLock) { onProgress((d.toFloat() / total * 0.85f).coerceAtMost(0.85f)) }
         }
         val pool = Executors.newFixedThreadPool(minOf(chains, cores)) { r -> Thread(r, "optimizer").apply { isDaemon = true } }
         val candidates = ArrayList<List<Furniture>>()
         try {
             val futures = (0 until chains).map { k ->
                 pool.submit(Callable {
-                    // Each chain owns its grid and RNG, so chains never share mutable state.
-                    val worker = LayoutOptimizer(room, effort, baseSeed * 1_000_003L + k * 7919L, goal)
+                    // Each chain owns its grids and RNG, so chains never share mutable state.
+                    val worker = LayoutOptimizer(room, space, baseSeed * 1_000_003L + k * 7919L, goal)
                     worker.designWeight = designWeight
                     val seedLayout = if (k == 0) start else worker.wallSeed(start)
                     val (layout, _) = worker.anneal(reference, seedLayout, explore, 2.0f, tick)
@@ -116,21 +129,46 @@ class LayoutOptimizer(
         var bestLayout = start
         var bestCost = Float.MAX_VALUE
         for (c in candidates) {
-            val fine = totalCost(reference, c, fineGrid) + selectWeight * DesignGuidelines.cost(room, c, goal.relationScale.coerceIn(0.3f, 1.2f)) + safetyCost(c)
+            val fine = selectCost(reference, c)
             if (fine < bestCost) { bestCost = fine; bestLayout = c }
         }
+        val polished = bestLayout.map { snapTidy(it) }
+        val finalLayout = settle(reference, if (selectCost(reference, polished) <= bestCost) polished else bestLayout)
+        onProgress(0.9f)
 
-        val polished = bestLayout.map { snapTidy(it, bestLayout) }
-        val polishedCost = totalCost(reference, polished, fineGrid) + selectWeight * DesignGuidelines.cost(room, polished, goal.relationScale.coerceIn(0.3f, 1.2f)) + safetyCost(polished)
-        val finalLayout = if (polishedCost <= bestCost) polished else bestLayout
-        val after = OpennessAnalyzer.analyze(room, finalLayout, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
-        onProgress(1f)
-        return OptimizeResult(finalLayout, before, after, violations(finalLayout))
+        // Finish with micro-nudges: the anneal gets the big picture right, nudges get the inches.
+        val nudges = if (polish && space != SpaceGoal.QUICK_WINS) MicroNudge.chain(room, finalLayout, space, maxMoves = 3) else emptyList()
+        return finish(reference, MicroNudge.applyAll(finalLayout, nudges), before, nudges, onProgress)
     }
 
-    /** Easy living: the full fall-safety audit judges the finished candidates (too slow for every step). */
-    private fun safetyCost(layout: List<Furniture>): Float =
-        if (goal != LayoutGoal.EASY_LIVING) 0f else 0.08f * (100 - FallSafety.audit(room, layout).score)
+    private fun finish(reference: List<Furniture>, layout: List<Furniture>, before: OpennessReport, nudges: List<Nudge>, onProgress: (Float) -> Unit): OptimizeResult {
+        val after = OpennessAnalyzer.analyze(room, layout, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
+        val diff = OpenSpace.diff(room, reference, layout)
+        onProgress(1f)
+        return OptimizeResult(layout, before, after, cons.violations(layout), diff, space, nudges)
+    }
+
+    /**
+     * Pieces the search left within 5 cm of where they stand today go back exactly there (unless
+     * that breaks a rule): a plan should never ask you to shift something an inch for nothing.
+     */
+    private fun settle(reference: List<Furniture>, layout: List<Furniture>): List<Furniture> {
+        val ref = reference.associateBy { it.id }
+        var out = layout
+        var hard = cons.hardCost(out)
+        for (f in layout) {
+            val o = ref[f.id] ?: continue
+            if (f == o || f.locked) continue
+            if (f.center.dist(o.center) >= 0.05f || abs(o.rotationDelta(f)) >= 3f) continue
+            val trial = out.map { if (it.id == f.id) o else it }
+            val h = cons.hardCost(trial)
+            if (h <= hard + 1e-4f) { out = trial; hard = h }
+        }
+        return out
+    }
+
+    private fun selectCost(reference: List<Furniture>, c: List<Furniture>): Float =
+        totalCost(reference, c, fineGrid, fineMeter) + selectWeight * DesignGuidelines.cost(room, c, goal.relationScale.coerceIn(0.3f, 1.2f))
 
     private fun anneal(original: List<Furniture>, start: List<Furniture>, iters: Int, t0: Float, tick: (Int) -> Unit): Pair<List<Furniture>, Float> {
         val cur = start.toMutableList()
@@ -215,36 +253,20 @@ class LayoutOptimizer(
 
     // ------------------------------------------------------------------ cost
 
-    fun totalCost(original: List<Furniture>, layout: List<Furniture>, g: OccupancyGrid = grid): Float {
-        var hard = 0f
+    fun totalCost(original: List<Furniture>, layout: List<Furniture>, g: OccupancyGrid = grid, m: OpenSpace.Meter = meter): Float {
+        val hard = cons.hardCost(layout)
         var soft = 0f
-        for ((i, f) in layout.withIndex()) {
-            val corners = f.corners()
-            hard += outsidePenalty(corners) * 3f
-            for (j in i + 1 until layout.size) {
-                hard += penetration(corners, layout[j].corners()) * 4f
-            }
-            for (ds in doorSwings) hard += penetration(corners, ds) * 3f
-            if (f.tall) for (wz in windowZones) hard += penetration(corners, wz) * 1.5f
-            // Use-zones must be clear (of other pieces, of walls).
-            val zones = listOfNotNull(f.frontZone()) + f.sideZones()
-            for (z in zones) {
-                hard += outsidePenalty(z) * 1.2f
-                for (o in layout) {
-                    if (o.id == f.id || zoneExempt(f, o)) continue
-                    hard += penetration(z, o.corners()) * 1.5f
-                }
-            }
+        for (f in layout) {
             // Backs to walls.
             val affinity = if (goal == LayoutGoal.PARTY) max(f.type.wallAffinity, 0.6f) else f.type.wallAffinity
             if (affinity > 0f) soft += affinity * wallMisfit(f) * 0.9f
             soft += relationCost(f, layout) * goal.relationScale + goalCost(f, layout)
-            // Sweat: how far it moved from where it sits today.
+            // Effort: how far it moved from where it sits today.
             val o = original.firstOrNull { it.id == f.id }
             if (o != null) {
                 val moved = o.center.dist(f.center)
                 val rotated = abs(o.rotationDelta(f)) / 90f
-                if (moved > 0.05f || rotated > 0.05f) soft += effort.movePenalty * (0.3f + moved + 0.3f * rotated) * sizeFactor(f)
+                if (moved > 0.05f || rotated > 0.05f) soft += space.movePenalty * (0.3f + moved + 0.3f * rotated) * sizeFactor(f)
             }
         }
         // Interior-design guidelines (conversation, balance, alignment, emphasis).
@@ -253,14 +275,27 @@ class LayoutOptimizer(
         val open = rep.score / 100f
         // Furniture you can't walk up to is useless, however open the room looks.
         val unreachable = (1f - rep.accessPct) * layout.size
-        var goalOpen = goal.clearBonus * rep.clearDiameter
-        if (goal == LayoutGoal.ACCESSIBLE || goal == LayoutGoal.EASY_LIVING) goalOpen -= 6f * max(0f, TURNING_DIAMETER - rep.clearDiameter)
-        // Easy living: somewhere sturdy to sit within a couple of steps of the door (shoes, groceries, catching breath).
-        if (goal == LayoutGoal.EASY_LIVING && layout.none { FallSafety.isSeat(it) && it.center.dist(room.entryPoint()) <= FallSafety.SEAT_NEAR_DOOR }) goalOpen -= 0.6f
-        return hard * 10f + soft + unreachable * 2.5f - open * goal.openWeight - goalOpen
+        val goalOpen = goal.clearBonus * rep.clearDiameter
+        return hard * 10f + soft + unreachable * 2.5f - open * goal.openWeight - goalOpen - spaceTerm(m.measure(layout))
     }
 
-    /** Extra wishes that only matter for some goals. */
+    /** Reward for open space as the space goal sees it: zone, usable floor, lane widths. */
+    private fun spaceTerm(sp: OpenSpaceReport): Float {
+        val floor = room.area.coerceAtLeast(0.5f)
+        val zone = (sp.zone?.area ?: 0f) / floor
+        val usable = sp.usableArea / floor
+        var lane = 0f
+        var tight = 0f
+        for (c in sp.corridors) {
+            if (!c.reachable) { tight += 1f; continue }
+            lane += 0.5f * (min(c.width, Lanes.GENEROUS) / Lanes.GENEROUS + min(c.width, Lanes.CLEAR) / Lanes.CLEAR)
+            if (c.width < Lanes.CLEAR) tight += (Lanes.CLEAR - c.width) / Lanes.CLEAR
+        }
+        val laneAvg = if (sp.corridors.isEmpty()) 1f else lane / sp.corridors.size
+        return space.zoneWeight * zone + space.usableWeight * usable + space.laneWeight * laneAvg - space.tightWeight * tight
+    }
+
+    /** Extra wishes that only matter for some room uses. */
     private fun goalCost(f: Furniture, layout: List<Furniture>): Float {
         var c = 0f
         when (goal) {
@@ -269,7 +304,7 @@ class LayoutOptimizer(
                     // Glare: screen facing a window, or a bright window right behind the screen.
                     val mid = room.openingSegment(w).pointAt(0.5f)
                     val toWin = (mid - f.center).normalized()
-                    val align = kotlin.math.abs(f.front() dot toWin)
+                    val align = abs(f.front() dot toWin)
                     if (align > 0.6f) c += 1.2f * (align - 0.6f) / 0.4f * (3f / (1f + mid.dist(f.center)))
                 }
                 FurnitureType.ARMCHAIR -> {
@@ -282,28 +317,13 @@ class LayoutOptimizer(
                 }
                 else -> {}
             }
-            LayoutGoal.EASY_LIVING -> {
-                // Shin-height pieces near the way in are the classic trip / walker snag.
-                if (f.height < 0.6f && f.type != FurnitureType.BED) {
-                    val d = f.corners().minOf { it.dist(room.entryPoint()) }
-                    if (d < 1.2f) c += 0.8f * (1.2f - d) / 1.2f
-                }
-                // Nothing low on the straight line from the door to anywhere people go.
-                if (f.height <= FallSafety.TRIP_HEIGHT) for ((d, line) in FallSafety.desireLines(room, layout)) {
-                    if (FallSafety.blocksLine(f, d, line)) c += 0.9f
-                }
-                // A 90 cm clear side to get out of bed (pick the better side).
-                if (f.type == FurnitureType.BED) c += 1.5f * FallSafety.bedExitObstruction(room, f, layout)
-                // People steady themselves on furniture: tall pieces flat against a wall (anchorable).
-                if (f.height >= 1.2f) c += 0.5f * wallMisfit(f)
-            }
             LayoutGoal.WORK_FROM_HOME -> if (f.type == FurnitureType.DESK) {
                 val w = room.windows().minByOrNull { room.openingSegment(it).distanceTo(f.center) }
                 if (w != null) {
                     val d = room.openingSegment(w).distanceTo(f.center)
                     c += 0.9f * max(0f, d - 1.0f)
                     // Daylight from the side: no glare on screen, no squinting into the window.
-                    c += 0.8f * kotlin.math.abs(f.front() dot room.inwardNormal(w.wallIndex))
+                    c += 0.8f * abs(f.front() dot room.inwardNormal(w.wallIndex))
                 }
                 // Out of the doorway traffic.
                 room.doors().forEach { d -> if (room.openingSegment(d).distanceTo(f.center) < 1.4f) c += 0.6f }
@@ -326,13 +346,6 @@ class LayoutOptimizer(
     }
 
     private fun sizeFactor(f: Furniture) = (0.6f + f.footprint()).coerceAtMost(2.5f)
-
-    private fun zoneExempt(owner: Furniture, other: Furniture): Boolean = when (other.type) {
-        FurnitureType.CHAIR -> owner.type == FurnitureType.DESK || owner.type == FurnitureType.DINING_TABLE
-        FurnitureType.COFFEE_TABLE -> owner.type == FurnitureType.SOFA || owner.type == FurnitureType.ARMCHAIR
-        FurnitureType.NIGHTSTAND -> owner.type == FurnitureType.BED
-        else -> false
-    }
 
     private fun wallMisfit(f: Furniture): Float {
         val back = f.backCenter()
@@ -370,7 +383,8 @@ class LayoutOptimizer(
             FurnitureType.COFFEE_TABLE -> {
                 val sofa = layout.filter { it.type == FurnitureType.SOFA }.minByOrNull { it.center.dist(f.center) }
                 if (sofa != null) {
-                    val target = sofa.center + sofa.front() * (sofa.depth / 2f + 0.42f + f.depth / 2f)
+                    // 16″ of legroom: the middle of the comfortable 14–18″ band.
+                    val target = sofa.center + sofa.front() * (sofa.depth / 2f + 0.41f + f.depth / 2f)
                     c += 0.7f * target.dist(f.center)
                 }
             }
@@ -406,34 +420,14 @@ class LayoutOptimizer(
         return c
     }
 
-    private fun outsidePenalty(poly: List<Vec2>): Float {
-        var p = 0f
-        for (v in poly) if (!Geo.pointInPolygon(v, room.outline)) p += 0.05f + Geo.distanceToBoundary(v, room.outline)
-        return p
-    }
-
-    /** Smallest separating distance along SAT axes; 0 if the quads don't overlap. */
-    private fun penetration(a: List<Vec2>, b: List<Vec2>): Float {
-        var minOverlap = Float.MAX_VALUE
-        for (poly in arrayOf(a, b)) {
-            for (i in poly.indices) {
-                val axis = (poly[(i + 1) % poly.size] - poly[i]).perp().normalized()
-                var minA = Float.MAX_VALUE; var maxA = -Float.MAX_VALUE
-                for (p in a) { val d = p dot axis; if (d < minA) minA = d; if (d > maxA) maxA = d }
-                var minB = Float.MAX_VALUE; var maxB = -Float.MAX_VALUE
-                for (p in b) { val d = p dot axis; if (d < minB) minB = d; if (d > maxB) maxB = d }
-                val o = min(maxA, maxB) - max(minA, minB)
-                if (o <= 0.005f) return 0f
-                if (o < minOverlap) minOverlap = o
-            }
-        }
-        return 0.05f + minOverlap
-    }
-
-    /** Square up near-axis rotations and nudge pieces that hover a few cm off a wall. */
-    private fun snapTidy(f: Furniture, layout: List<Furniture>): Furniture {
+    /**
+     * Square up near-axis rotations (relative to the room's own walls, which for an AR scan are
+     * rarely the world axes) and pull pieces that hover a few cm off a wall back against it.
+     */
+    private fun snapTidy(f: Furniture): Furniture {
         if (f.locked) return f
-        val snappedRot = (Math.round(f.rotationDeg / 90f) * 90f)
+        val rel = f.rotationDeg - frameDeg
+        val snappedRot = Math.round(rel / 90f) * 90f + frameDeg
         var g = if (abs(Geo.shortestAngleDiffDeg(f.rotationDeg, snappedRot)) < 12f) f.withPose(f.center, snappedRot) else f
         if (g.type.wallAffinity >= 0.5f) {
             val back = g.backCenter()
@@ -446,16 +440,7 @@ class LayoutOptimizer(
         return g
     }
 
-    fun violations(layout: List<Furniture>): List<String> {
-        val out = ArrayList<String>()
-        for ((i, f) in layout.withIndex()) {
-            val c = f.corners()
-            if (outsidePenalty(c) > 0f) out += "${f.name} sticks through a wall"
-            for (j in i + 1 until layout.size) if (penetration(c, layout[j].corners()) > 0.06f) out += "${f.name} overlaps ${layout[j].name}"
-            if (doorSwings.any { penetration(c, it) > 0.06f }) out += "${f.name} blocks a door swing"
-        }
-        return out.distinct()
-    }
+    fun violations(layout: List<Furniture>): List<String> = cons.violations(layout)
 
     private fun gauss(): Float {
         // Box-Muller

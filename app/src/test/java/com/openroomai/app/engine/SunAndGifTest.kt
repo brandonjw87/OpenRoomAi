@@ -67,7 +67,7 @@ class SunAndGifTest {
         assertTrue(rep.maxHours > 0f)
         assertTrue(rep.insights.any { it.icon == "☀️" })
         // With the sun known, the optimized plant keeps a healthy dose (the reward caps at 4 h).
-        val res = LayoutOptimizer(room, Effort.BALANCED, 5L).optimize(room.furniture)
+        val res = LayoutOptimizer(room, SpaceGoal.WIDEST_FLOW, 5L).optimize(room.furniture)
         val plant = room.furniture.first { it.type == FurnitureType.PLANT }
         val today = SunModel.simulate(room, room.furniture, Season.TODAY, 12f).pieceHours[plant.id]!!
         val after = SunModel.simulate(room, res.layout, Season.TODAY, 12f).pieceHours[plant.id]!!

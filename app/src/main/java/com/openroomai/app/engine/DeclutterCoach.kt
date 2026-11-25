@@ -116,5 +116,5 @@ object DeclutterCoach {
         else -> "a smaller ${t.label.lowercase()}"
     }
 
-    private fun fmtArea(m2: Float) = "%.1f m²".format(m2)
+    private fun fmtArea(m2: Float) = Units.area(m2)
 }

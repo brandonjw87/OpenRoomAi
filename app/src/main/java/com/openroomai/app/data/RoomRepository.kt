@@ -13,7 +13,7 @@ import java.io.File
 
 class RoomRepository(context: Context) {
     private val dir = File(context.filesDir, "rooms").apply { mkdirs() }
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
+    private val json = JSON
 
     fun list(): List<Room> = dir.listFiles { f -> f.extension == "json" }
         ?.mapNotNull { runCatching { json.decodeFromString<Room>(it.readText()) }.getOrNull() }
@@ -31,6 +31,12 @@ class RoomRepository(context: Context) {
     }
 
     companion object {
+        /**
+         * Rooms saved by earlier versions may carry values that no longer exist (retired goals);
+         * coercing them to the defaults keeps those rooms loadable instead of silently dropping them.
+         */
+        val JSON = Json { ignoreUnknownKeys = true; coerceInputValues = true; prettyPrint = false }
+
         /** A deliberately awkward living room so people can see the magic without scanning. */
         fun demoRoom(): Room {
             val base = Room.rectangle("Demo living room", 4.6f, 3.8f)

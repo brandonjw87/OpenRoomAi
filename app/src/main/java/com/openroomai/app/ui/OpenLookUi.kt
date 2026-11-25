@@ -76,7 +76,7 @@ fun OpenLookCard(
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Wall ${room.wallLabel(sp.mirror.wallIndex)} · ${(sp.mirror.width * 100).roundToInt()} cm wide, ${(sp.mirror.bottom * 100).roundToInt()}–${(sp.mirror.top * 100).roundToInt()} cm up", style = MaterialTheme.typography.labelLarge)
+                        Text("Wall ${room.wallLabel(sp.mirror.wallIndex)} · ${com.openroomai.app.engine.Units.len(sp.mirror.width)} wide, ${com.openroomai.app.engine.Units.len(sp.mirror.bottom)}–${com.openroomai.app.engine.Units.len(sp.mirror.top)} up", style = MaterialTheme.typography.labelLarge)
                         Text(sp.reason, color = Palette.Muted)
                     }
                     TextButton(onClick = { vm.addMirror(sp) }) { Text("Hang") }

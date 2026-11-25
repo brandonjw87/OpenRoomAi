@@ -30,7 +30,7 @@ object MovePlanner {
         val current = before.associateBy { it.id }.toMutableMap()
         val pending = before.filter { b ->
             val a = afterById[b.id] ?: return@filter false
-            b.center.dist(a.center) > 0.08f || abs(b.rotationDelta(a)) > 5f
+            b.center.dist(a.center) > MIN_MOVE || abs(b.rotationDelta(a)) > 2f
         }.map { it.id }.toMutableList()
         // New items from "Will it fit?" are placed last.
         val newcomers = after.filter { a -> before.none { it.id == a.id } }
@@ -82,15 +82,22 @@ object MovePlanner {
     /** Footprint shrunk by 3 cm per side so flush neighbours don't count as collisions. */
     private fun shrink(f: Furniture) = Geo.rectCorners(f.center, (f.width - 0.06f).coerceAtLeast(0.05f), (f.depth - 0.06f).coerceAtLeast(0.05f), f.angleRad)
 
+    /**
+     * Somewhere roomy to stand a piece for a moment: inside the walls, clear of everything still
+     * standing or still to arrive, and never in a door's swing (you'll need that door).
+     */
     private fun parkingSpot(room: Room, f: Furniture, obstacles: List<Furniture>): Furniture {
         val g = OccupancyGrid(room, 0.1f)
         g.stamp(obstacles)
+        val swings = room.doors().map { room.doorSwing(it) }
         val needed = maxOf(f.width, f.depth) / 2f
         var best = Geo.centroid(room.outline)
-        var bestScore = -1f
+        var bestScore = -Float.MAX_VALUE
         for (i in 0 until g.size) {
             if (!g.inside[i] || g.blocked[i]) continue
             val p = g.center(i % g.w, i / g.w)
+            val corners = f.withPose(p, f.rotationDeg).corners()
+            if (swings.any { Geo.convexOverlap(corners, it) } || Geo.outsideAmount(corners, room.outline) > 0f) continue
             val s = g.dist[i] - needed - 0.1f * p.dist(f.center)
             if (s > bestScore) { bestScore = s; best = p }
         }
@@ -102,18 +109,19 @@ object MovePlanner {
         val dist = move.length()
         val rot = from.rotationDelta(to)
         val parts = ArrayList<String>()
-        if (dist > 0.08f) {
+        if (dist > MIN_MOVE) {
             val wall = wallInDirection(room, from.center, move)
-            parts += "Slide it ${fmt(dist)} toward Wall ${room.wallLabel(wall)}"
+            parts += "Slide it ${if (dist < 0.61f) Units.nudge(dist) else fmt(dist)} toward Wall ${room.wallLabel(wall)}"
         }
         if (abs(rot) > 170f) parts += "turn it around to face the other way"
-        else if (abs(rot) > 5f) {
+        else if (abs(rot) > 2f) {
             val dir = if (rot > 0) "clockwise" else "counter-clockwise"
             parts += "turn it ${abs(rot).roundToInt()}° $dir (as seen on the plan)"
         }
         val title = when {
             temp -> "Temporarily park the ${from.name}"
-            dist <= 0.08f -> "Rotate the ${from.name}"
+            dist <= MIN_MOVE -> "Rotate the ${from.name}"
+            dist <= MICRO && abs(rot) <= 2f -> "Nudge the ${from.name}"
             else -> "Move the ${from.name}"
         }
         val tail = if (temp) "We'll bring it back in a later step." else {
@@ -127,7 +135,7 @@ object MovePlanner {
     }
 
     /** The wall you're walking toward when moving in [dir] from [p] (first wall hit by the ray). */
-    private fun wallInDirection(room: Room, p: Vec2, dir: Vec2): Int {
+    fun wallInDirection(room: Room, p: Vec2, dir: Vec2): Int {
         val d = dir.normalized()
         var best = 0
         var bestT = Float.MAX_VALUE
@@ -156,5 +164,12 @@ object MovePlanner {
         return "Wall ${room.wallLabel(i)}"
     }
 
-    fun fmt(m: Float): String = if (m < 1f) "${(m * 100).roundToInt()} cm" else "%.1f m".format(m)
+    fun fmt(m: Float): String = Units.len(m)
+
+    /** Anything under ¼″ isn't a move. */
+    const val MIN_MOVE = 0.006f
+    /** A foot or less without turning: a nudge, not a haul. */
+    const val MICRO = 0.305f
+
+    fun isMicro(s: MoveStep) = !s.temporary && s.distance <= MICRO && abs(s.from.rotationDelta(s.to)) <= 2f
 }
