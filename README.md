@@ -58,8 +58,9 @@ walkways under 36″, places you can walk to, each widened walkway, openness sco
 and how many moves are micro vs. bigger). A **Before / Compare / After** switch adds a draggable
 wipe between the two plans.
 
-Demo room, Max open center: biggest open zone **4′ 11″ × 4′ 9″ → 13′ × 7′ 11″ (+80 sq ft)**,
-narrowest walkway **13″ → 46″**, every piece reachable.
+Demo room, Max open center (typical test runs; the search is randomized): biggest open zone
+**4′ 11″ × 4′ 9″ → 11–13′ × 7′ 10″ (+60–80 sq ft)**, narrowest walkway **13″ → 46–47″**, every
+piece reachable.
 
 ### Also in 2.0
 - **Inches & feet or cm & m** everywhere (default from your region, toggle on Home). Drags and
