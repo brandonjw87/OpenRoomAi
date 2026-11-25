@@ -133,6 +133,8 @@ fun PlanCanvas(
     sun: SunReport? = null,
     /** Open-Look Studio suggestions, drawn as numbered dashed panes. */
     mirrorSpots: List<com.openroomai.app.engine.MirrorSpot> = emptyList(),
+    /** Easy-living overlay: night path, night lights, narrow spots, trip pieces. */
+    safety: com.openroomai.app.engine.FallSafetyReport? = null,
     ghost: List<Furniture>? = null,
     selectedId: String? = null,
     highlightId: String? = null,
@@ -192,6 +194,7 @@ fun PlanCanvas(
         drawPlan(this, tr, room, layout, report, layers, ghost, selectedId, highlightId, heat, sight, measurer, compact)
         if (sunImg != null && sun != null) drawSun(tr, room, sun, sunImg, layers.sunHours, measurer)
         drawMirrors(tr, room, mirrorSpots, measurer, compact)
+        if (safety != null && !compact) drawSafety(tr, room, layout, safety, measurer)
         if (!compact && room.northDeg != null) drawCompass(room.northDeg, measurer)
     }
 }
@@ -322,7 +325,7 @@ fun drawPlan(
     // Furniture.
     for (f in layout) {
         val pts = f.corners().map { tr.toScreen(it) }
-        val base = Color(f.type.colorArgb)
+        val base = Color(f.displayArgb)
         val sel = f.id == selectedId || f.id == highlightId
         drawPath(polyPath(pts), base.copy(alpha = if (sel) 0.95f else 0.75f))
         drawPath(polyPath(pts), if (sel) Color.White else base, style = Stroke(if (sel) 4f else 2f))
@@ -427,6 +430,40 @@ private fun DrawScope.drawMirrors(tr: PlanTransform, room: Room, spots: List<com
         val c = tr.toScreen(s.pointAt(0.5f) + n * (30f / tr.scale))
         drawCircle(Palette.Sky, 13f, c)
         val t = measurer.measure("${i + 1}", TextStyle(color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Black))
+        drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - t.size.height / 2f))
+    }
+}
+
+/** Night path (warm dashes), 💡 night lights, red rings where paths pinch, orange outlines on trip pieces. */
+private fun DrawScope.drawSafety(tr: PlanTransform, room: Room, layout: List<Furniture>, rep: com.openroomai.app.engine.FallSafetyReport, measurer: TextMeasurer) {
+    // Desire lines from the door, faint, so people see where "straight" is.
+    for ((_, line) in com.openroomai.app.engine.FallSafety.desireLines(room, layout)) {
+        drawLine(Color.White.copy(alpha = 0.18f), tr.toScreen(line.a), tr.toScreen(line.b), strokeWidth = 3f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 10f)))
+    }
+    if (rep.nightPath.size >= 2) {
+        val path = Path().apply {
+            val p0 = tr.toScreen(rep.nightPath[0]); moveTo(p0.x, p0.y)
+            for (k in 1 until rep.nightPath.size) { val p = tr.toScreen(rep.nightPath[k]); lineTo(p.x, p.y) }
+        }
+        drawPath(path, NightGlow.copy(alpha = 0.25f), style = Stroke(18f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(path, NightGlow, style = Stroke(4f, cap = StrokeCap.Round, join = StrokeJoin.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
+    }
+    for (f in layout.filter { it.name in rep.tripPieces }) {
+        val pts = f.corners().map { tr.toScreen(it) }
+        val p = Path().apply { moveTo(pts[0].x, pts[0].y); for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y); close() }
+        drawPath(p, Color(0xFFFF8A3D), style = Stroke(6f))
+    }
+    // One ring per reported fix, so every ring on the plan has an explanation in the card.
+    for (p in rep.items.filter { it.icon == "↔️" }.mapNotNull { it.at }) {
+        val c = tr.toScreen(p)
+        drawCircle(Palette.Coral.copy(alpha = 0.25f), 20f, c)
+        drawCircle(Palette.Coral, 20f, c, style = Stroke(3f))
+    }
+    for (l in rep.nightLights) {
+        val c = tr.toScreen(l.at)
+        drawCircle(NightGlow.copy(alpha = 0.35f), 22f, c)
+        val t = measurer.measure("💡", TextStyle(fontSize = 15.sp))
         drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - t.size.height / 2f))
     }
 }

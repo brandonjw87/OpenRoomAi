@@ -108,7 +108,15 @@ private enum class EditTool { SELECT, DOOR, WINDOW }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPreview: () -> Unit, onOpen3D: () -> Unit = {}, onOpenMoving: () -> Unit = {}) {
+fun PlanScreen(
+    vm: AppViewModel,
+    arSupported: Boolean?,
+    onBack: () -> Unit,
+    onPreview: () -> Unit,
+    onOpen3D: () -> Unit = {},
+    onOpenMoving: () -> Unit = {},
+    onPlaceInAr: (Furniture) -> Unit = {},
+) {
     val room = vm.room ?: return
     val result = vm.result
     var showAfter by remember(room.id) { mutableStateOf(false) }
@@ -129,6 +137,10 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
     }
     val after = showAfter && result != null
     var showMirrorSpots by remember { mutableStateOf(false) }
+    var showSafety by remember(room.id) { mutableStateOf(room.goal == LayoutGoal.EASY_LIVING) }
+    LaunchedEffect(room.furniture, room.outline, room.openings, after, result) {
+        vm.refreshSafety(if (after && result != null) result.layout else room.furniture)
+    }
     LaunchedEffect(room.outline, room.openings, room.mirrors, after, result) {
         vm.refreshOpenLook(if (after && result != null) result.layout else room.furniture)
     }
@@ -190,6 +202,7 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                         layers = layers,
                         sun = if (layers.sunlight && morph !in 0.01f..0.99f) vm.sunReport else null,
                         mirrorSpots = if (showMirrorSpots) vm.mirrorSpots else emptyList(),
+                        safety = if (showSafety && morph !in 0.01f..0.99f) vm.fallSafety else null,
                         ghost = if (after) room.furniture else null,
                         selectedId = selected,
                         interactive = !after,
@@ -220,6 +233,12 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                     }
                 }
                 if (layers.heatmap) Legend()
+            }
+        }
+        item {
+            EasyLivingCard(vm.fallSafety, room.goal, showSafety, { showSafety = it }, busy = vm.progress != null) {
+                showSafety = true
+                vm.optimizeForEasyLiving()
             }
         }
         if (layers.sunlight) item {
@@ -387,7 +406,7 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
         }
     }
 
-    if (catalog) CatalogDialog(vm, onDismiss = { catalog = false; vm.dismissFit() })
+    if (catalog) CatalogDialog(vm, onDismiss = { catalog = false; vm.dismissFit() }, onPlaceInAr = if (arSupported != false) { item -> catalog = false; onPlaceInAr(item) } else null)
     if (renaming) {
         var name by remember { mutableStateOf(room.name) }
         AlertDialog(
@@ -521,6 +540,7 @@ private fun ItemEditor(f: Furniture, vm: AppViewModel, onDelete: () -> Unit) {
             IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete", tint = Palette.Coral) }
         }
         if (f.locked) Text("Locked: the optimizer won't move it (built-ins, radiators, the cat's spot).", color = Palette.Amber, style = MaterialTheme.typography.bodyMedium)
+        f.seenAs?.let { Text("📷 Camera saw: $it" + if (f.color != null) " · colour taken from the photo" else "", color = Palette.Sky, style = MaterialTheme.typography.bodyMedium) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FurnitureType.entries.forEach { t ->
                 FilterChip(

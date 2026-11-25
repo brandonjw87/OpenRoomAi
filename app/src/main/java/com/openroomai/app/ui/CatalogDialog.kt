@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -55,7 +56,7 @@ import kotlin.math.roundToInt
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CatalogDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+fun CatalogDialog(vm: AppViewModel, onDismiss: () -> Unit, onPlaceInAr: ((Furniture) -> Unit)? = null) {
     val room = vm.room ?: return
     var type by remember { mutableStateOf(FurnitureType.SOFA) }
     var name by remember { mutableStateOf(type.label) }
@@ -126,6 +127,9 @@ fun CatalogDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                     }
                     OutlinedButton(onClick = { vm.addFurniture(item()); onDismiss() }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                         Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("Add to room (I already own it)")
+                    }
+                    if (onPlaceInAr != null) OutlinedButton(onClick = { onPlaceInAr(item()) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                        Icon(Icons.Default.ViewInAr, null); Spacer(Modifier.width(8.dp)); Text("📱 See it in AR at real size")
                     }
                     Text(
                         "Tip: measure the box it ships in too — doorways are often the real bottleneck. Your narrowest door here is " +

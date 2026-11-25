@@ -8,7 +8,11 @@ import android.os.Build
 import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import com.google.ar.core.Anchor
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Pose
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.Plane
@@ -18,6 +22,9 @@ import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
 import com.google.ar.core.exceptions.UnavailableException
+import com.openroomai.app.engine.CameraSnapshot
+import com.openroomai.app.engine.Detection
+import com.openroomai.app.engine.VisionFusion
 import com.openroomai.app.model.Furniture
 import com.openroomai.app.model.FurnitureType
 import com.openroomai.app.model.Geo
@@ -30,13 +37,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
-enum class ScanStep { FLOOR, OUTLINE, OPENINGS, FURNITURE, PREVIEW, ALIGN }
+enum class ScanStep { FLOOR, OUTLINE, OPENINGS, FURNITURE, PREVIEW, ALIGN, PLACE }
 
 data class ManualBox(val corners: List<Vec2>, val center: Vec2, val width: Float, val depth: Float, val angleRad: Float)
 
@@ -61,6 +70,18 @@ data class ArUiState(
     val alignPoints: Int = 0,
     val aligned: Boolean = false,
     val error: String? = null,
+    /** Camera recognition: summary like ["couch", "chair ×2"]. */
+    val recognized: List<String> = emptyList(),
+    val visionReady: Boolean = false,
+    val visionMs: Long = 0,
+    /** Real objects hide virtual ones (depth occlusion active). */
+    val occlusion: Boolean = false,
+    // Place-in-AR
+    val placing: String? = null,
+    val placed: Boolean = false,
+    val placeOk: Boolean? = null,
+    val placeStatus: String = "",
+    val placeRotation: Float = 0f,
 )
 
 /**
@@ -121,6 +142,34 @@ class ArController : GLSurfaceView.Renderer {
     private val alignTaps = ArrayList<Vec2>()
     private var aligned = false
 
+    // Anchors keep content glued to the real world as ARCore refines its map (Google: "always use anchors").
+    private val cornerAnchors = ArrayList<Anchor?>()
+    private val alignAnchors = ArrayList<Anchor>()
+    /** Plan points matched to [alignAnchors] / [cornerAnchors] for the live rigid fit. */
+    private var alignSrc: List<Vec2> = emptyList()
+    private var alignFromCorners = false
+    private var afterAlign = ScanStep.PREVIEW
+
+    // Camera recognition (runs off the GL thread).
+    @Volatile private var detector: VisionDetector? = null
+    private val detectorLoading = AtomicBoolean(false)
+    private val visionBusy = AtomicBoolean(false)
+    private val visionExec = Executors.newSingleThreadExecutor { r -> Thread(r, "vision").apply { isDaemon = true } }
+    private val visionResults = ConcurrentLinkedQueue<Pair<CameraSnapshot, List<Detection>>>()
+    private val votes = VisionFusion.VoteBook()
+    private var sensorOrientation = -1
+
+    // Depth occlusion for virtual furniture.
+    private val depthTex = DepthTexture()
+
+    // Place-in-AR.
+    private var placing: Furniture? = null
+    private var placeAnchor: Anchor? = null
+    private var placeRotDeg = 0f
+    /** Last placement in plan coordinates (center, rotation), readable from the UI thread. */
+    @Volatile var placedInPlan: Pair<Vec2, Float>? = null
+        private set
+
     private val lines = FloatList()
     private val tris = FloatList()
     private val pts = FloatList()
@@ -157,6 +206,10 @@ class ArController : GLSurfaceView.Renderer {
                 return "Couldn't start AR: ${e.message}"
             }
         }
+        if (detector == null && detectorLoading.compareAndSet(false, true)) {
+            val ctx = act.applicationContext
+            visionExec.execute { detector = VisionDetector.create(ctx) }
+        }
         return try {
             session?.resume(); null
         } catch (e: CameraNotAvailableException) {
@@ -172,7 +225,16 @@ class ArController : GLSurfaceView.Renderer {
     fun destroy() {
         session?.close()
         session = null
+        visionExec.shutdownNow()
+        detector?.close()
+        detector = null
     }
+
+    private fun newAnchor(p: Vec2, y: Float = floorY): Anchor? = try {
+        session?.createAnchor(Pose.makeTranslation(p.x, if (y.isNaN()) 0f else y, p.y))
+    } catch (_: Exception) { null }
+
+    private fun detachAll(list: MutableList<out Anchor?>) { list.forEach { it?.detach() }; list.clear() }
 
     // ------------------------------------------------------------------ commands from UI
 
@@ -181,6 +243,7 @@ class ArController : GLSurfaceView.Renderer {
         corners.clear(); closed = false; openings.clear(); manual.clear(); detected = emptyList()
         accumulator.clear(); pending = null
         northSin = 0.0; northCos = 0.0; northSamples = 0
+        detachAll(cornerAnchors); detachAll(alignAnchors); votes.clear()
         if (!floorY.isNaN()) step = ScanStep.OUTLINE
         publish()
     }
@@ -196,10 +259,16 @@ class ArController : GLSurfaceView.Renderer {
 
     fun undo() = commands.add {
         when (step) {
-            ScanStep.OUTLINE -> if (closed) closed = false else if (corners.isNotEmpty()) corners.removeAt(corners.size - 1)
+            ScanStep.OUTLINE -> if (closed) closed = false else if (corners.isNotEmpty()) {
+                corners.removeAt(corners.size - 1)
+                cornerAnchors.removeLastOrNull()?.detach()
+            }
             ScanStep.OPENINGS -> if (pending != null) pending = null else if (openings.isNotEmpty()) openings.removeAt(openings.size - 1)
             ScanStep.FURNITURE -> if (pending != null) pending = null else if (manual.isNotEmpty()) manual.removeAt(manual.size - 1)
-            ScanStep.ALIGN -> if (alignTaps.isNotEmpty()) alignTaps.removeAt(alignTaps.size - 1)
+            ScanStep.ALIGN -> if (alignTaps.isNotEmpty()) {
+                alignTaps.removeAt(alignTaps.size - 1)
+                alignAnchors.removeLastOrNull()?.detach()
+            }
             else -> {}
         }
         publish()
@@ -216,14 +285,66 @@ class ArController : GLSurfaceView.Renderer {
     fun startPreview(room: Room, targets: List<Furniture>) = commands.add {
         previewRoom = room
         previewTargets = targets
-        alignTaps.clear()
-        if (room.scannedInAr && room.arSessionToken == sessionToken) {
-            alignTheta = 0f; alignT = Vec2.ZERO; aligned = true; step = ScanStep.PREVIEW
-        } else {
-            aligned = false; step = ScanStep.ALIGN
-        }
+        beginAlignment(room, ScanStep.PREVIEW)
         publish()
     }
+
+    /**
+     * Same session: glue the plan to the scan's corner anchors (drift-corrected every frame).
+     * Otherwise ask for two taps (corners A and B), which become anchors too.
+     */
+    private fun beginAlignment(room: Room, then: ScanStep) {
+        alignTaps.clear(); detachAll(alignAnchors)
+        afterAlign = then
+        val sameScan = room.scannedInAr && room.arSessionToken == sessionToken &&
+            cornerAnchors.size == room.outline.size && cornerAnchors.all { it != null }
+        if (sameScan) {
+            alignSrc = room.outline; alignFromCorners = true
+            alignTheta = 0f; alignT = Vec2.ZERO; aligned = true; step = then
+        } else if (room.scannedInAr && room.arSessionToken == sessionToken) {
+            alignSrc = emptyList(); alignFromCorners = false
+            alignTheta = 0f; alignT = Vec2.ZERO; aligned = true; step = then
+        } else {
+            alignSrc = emptyList(); alignFromCorners = false
+            aligned = false; step = ScanStep.ALIGN
+        }
+    }
+
+    /** Re-fit plan → world from the live anchor poses (call every tracked frame). */
+    private fun refreshAlignment() {
+        val anchors: List<Anchor?> = if (alignFromCorners) cornerAnchors else alignAnchors
+        if (alignSrc.isEmpty() || anchors.size != alignSrc.size) return
+        val dst = ArrayList<Vec2>(anchors.size)
+        for (a in anchors) {
+            if (a == null || a.trackingState != TrackingState.TRACKING) return
+            dst += Vec2(a.pose.tx(), a.pose.tz())
+        }
+        val (th, t) = Geo.fitRigid(alignSrc, dst)
+        alignTheta = th; alignT = t
+    }
+
+    // ------------------------------------------------------------------ place it in AR
+
+    /** Walk a piece (e.g. one you're thinking of buying) around the real room at true size. */
+    fun startPlacement(item: Furniture, room: Room?) = commands.add {
+        placing = item
+        placeAnchor?.detach(); placeAnchor = null
+        placeRotDeg = 0f
+        placedInPlan = null
+        previewRoom = room
+        previewTargets = room?.furniture ?: emptyList()
+        if (room != null) beginAlignment(room, ScanStep.PLACE) else { aligned = false; step = ScanStep.PLACE }
+        publish()
+    }
+
+    fun placeAtReticle() = commands.add {
+        val r = reticle ?: return@add
+        placeAnchor?.detach()
+        placeAnchor = newAnchor(r)
+        publish()
+    }
+
+    fun rotatePlacement(deltaDeg: Float) = commands.add { placeRotDeg = Geo.normalizeDeg(placeRotDeg + deltaDeg); publish() }
 
     fun realign() = commands.add { alignTaps.clear(); aligned = false; step = ScanStep.ALIGN; publish() }
 
@@ -235,7 +356,11 @@ class ArController : GLSurfaceView.Renderer {
         val center = Geo.centroid(outline)
         val furniture = ArrayList<Furniture>()
         st.detected.forEach { d ->
-            furniture += orient(Furniture(type = d.guess, center = d.center, width = d.width, depth = d.depth, height = d.height, rotationDeg = Math.toDegrees(d.angleRad.toDouble()).toFloat(), name = d.guess.label), center)
+            furniture += orient(Furniture(
+                type = d.guess, center = d.center, width = d.width, depth = d.depth, height = d.height,
+                rotationDeg = Math.toDegrees(d.angleRad.toDouble()).toFloat(), name = d.name ?: d.guess.label,
+                color = d.color, seenAs = d.seenAs,
+            ), center)
         }
         st.manual.forEach { m ->
             furniture += orient(Furniture(type = FurnitureType.OTHER, center = m.center, width = m.width, depth = m.depth, rotationDeg = Math.toDegrees(m.angleRad.toDouble()).toFloat(), name = "Item"), center)
@@ -267,7 +392,7 @@ class ArController : GLSurfaceView.Renderer {
                 if (closed) return
                 // Tapping near the first corner closes the room.
                 if (corners.size >= 3 && p.dist(corners[0]) < 0.25f) { closed = true; step = ScanStep.OPENINGS }
-                else corners.add(p)
+                else { corners.add(p); cornerAnchors.add(newAnchor(p)) }
             }
             ScanStep.OPENINGS -> {
                 val a = pending
@@ -283,7 +408,12 @@ class ArController : GLSurfaceView.Renderer {
             }
             ScanStep.ALIGN -> {
                 alignTaps += p
+                newAnchor(p)?.let { alignAnchors += it }
                 if (alignTaps.size == 2) computeAlignment()
+            }
+            ScanStep.PLACE -> {
+                placeAnchor?.detach()
+                placeAnchor = newAnchor(p)
             }
             else -> {}
         }
@@ -323,8 +453,12 @@ class ArController : GLSurfaceView.Renderer {
         alignTheta = worldAng - planAng
         alignT = wa - pa.rotated(alignTheta)
         aligned = true
-        step = ScanStep.PREVIEW
+        // Keep following the two tap anchors as tracking improves.
+        if (alignAnchors.size == 2) { alignSrc = listOf(pa, pb); alignFromCorners = false }
+        step = afterAlign
     }
+
+    private fun toPlan(w: Vec2): Vec2 = (w - alignT).rotated(-alignTheta)
 
     private fun toWorld(p: Vec2): Vec2 = p.rotated(alignTheta) + alignT
 
@@ -334,6 +468,7 @@ class ArController : GLSurfaceView.Renderer {
         GLES20.glClearColor(0.05f, 0.06f, 0.08f, 1f)
         background.create()
         prims.create()
+        depthTex.create()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -381,12 +516,23 @@ class ArController : GLSurfaceView.Renderer {
 
             updateFloor(frame)
             sampleNorth(frame)
+            // Anchored corners follow ARCore's refined map.
+            for (i in corners.indices) {
+                val a = cornerAnchors.getOrNull(i) ?: continue
+                if (a.trackingState == TrackingState.TRACKING) corners[i] = Vec2(a.pose.tx(), a.pose.tz())
+            }
+            if (aligned) refreshAlignment()
             if (!floorY.isNaN()) {
                 reticle = floorHit(frame, viewW / 2f, viewH / 2f)
                 if (step == ScanStep.FLOOR) step = ScanStep.OUTLINE
                 if (step == ScanStep.FURNITURE || step == ScanStep.OPENINGS || step == ScanStep.OUTLINE) accumulate(frame)
-                if (step == ScanStep.FURNITURE && frameNo % 20 == 0L) detected = accumulator.detect(if (closed) corners else null)
+                if (step == ScanStep.FURNITURE) {
+                    if (frameNo % 24 == 0L) captureForVision(frame)
+                    fuseVision()
+                    if (frameNo % 20 == 0L) detected = withVision(accumulator.detect(if (closed) corners else null))
+                }
             }
+            if ((step == ScanStep.PREVIEW || step == ScanStep.PLACE) && depthOn) depthTex.update(frame)
 
             drawScene()
             if (frameNo % 6 == 0L) publish()
@@ -566,6 +712,96 @@ class ArController : GLSurfaceView.Renderer {
         const val WALL_BAND = 0.03f
     }
 
+    // ------------------------------------------------------------------ camera recognition
+
+    /** Grab the CPU camera image, convert it, and run the detector on the background thread. */
+    private fun captureForVision(frame: Frame) {
+        val det = detector ?: return
+        if (!visionBusy.compareAndSet(false, true)) return
+        try {
+            val cam = frame.camera
+            val intr = cam.imageIntrinsics
+            val m = FloatArray(16)
+            cam.pose.toMatrix(m, 0)
+            val dims = intr.imageDimensions
+            val snap = CameraSnapshot(m, intr.focalLength[0], intr.focalLength[1], intr.principalPoint[0], intr.principalPoint[1], dims[0], dims[1], imageRotation())
+            val rgb = ByteArray(VisionDetector.SIZE * VisionDetector.SIZE * 3)
+            frame.acquireCameraImage().use { img -> VisionDetector.yuvToUprightRgb(img, snap.rotationDeg, rgb) }
+            visionExec.execute {
+                try { visionResults.add(snap to det.detect(rgb)) } catch (t: Throwable) { Log.w("OpenRoomAR", "vision", t) } finally { visionBusy.set(false) }
+            }
+        } catch (_: NotYetAvailableException) {
+            visionBusy.set(false)
+        } catch (t: Throwable) {
+            visionBusy.set(false)
+            Log.w("OpenRoomAR", "vision capture", t)
+        }
+    }
+
+    /** Clockwise rotation from the sensor image to upright on screen (back camera). */
+    private fun imageRotation(): Int {
+        if (sensorOrientation < 0) {
+            sensorOrientation = try {
+                val a = activity ?: return 90
+                val id = session?.cameraConfig?.cameraId ?: return 90
+                val cm = a.getSystemService(android.content.Context.CAMERA_SERVICE) as CameraManager
+                cm.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            } catch (_: Exception) { 90 }
+        }
+        val display = when (displayRotation()) {
+            Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0
+        }
+        return (sensorOrientation - display + 360) % 360
+    }
+
+    /** Merge finished detections into the vote book (GL thread). */
+    private fun fuseVision() {
+        while (true) {
+            val (cam, dets) = visionResults.poll() ?: break
+            val clusters = detected.filter { !it.fromCamera }.map { VisionFusion.Cluster(it.center, it.corners(), it.height) }
+            val (matched, unmatched) = VisionFusion.match(cam, dets, clusters, floorY)
+            matched.forEach { (c, d) -> votes.vote(c.key, d, cameraOnly = false) }
+            // Strong sightings the depth scan missed (thin chair legs, dark sofas) become camera-only pieces.
+            for (d in unmatched) {
+                if (d.label !in VisionFusion.CAMERA_ONLY || d.score < 0.6f) continue
+                val sb = VisionFusion.boxToSensor(d.box, cam.rotationDeg)
+                // The bottom-centre of the box in the upright image touches the floor.
+                val bottom = VisionFusion.uprightToSensor((d.box.l + d.box.r) / 2f, d.box.b, cam.rotationDeg)
+                val p = VisionFusion.floorPoint(cam, bottom.x, bottom.y, floorY) ?: continue
+                if (closed && corners.size >= 3 && !Geo.pointInPolygon(p, corners)) continue
+                if (sb.area > 0f) votes.vote(p, d, cameraOnly = true)
+            }
+        }
+    }
+
+    /** Depth clusters, relabelled and coloured by the camera's votes, plus camera-only finds. */
+    private fun withVision(geo: List<DetectedObject>): List<DetectedObject> {
+        val refined = geo.map { d ->
+            val e = votes.near(d.center)
+            val (t, seen) = VisionFusion.refine(d.guess, e, d.width, d.depth, d.height)
+            d.copy(guess = t, seenAs = seen, color = e?.color, name = e?.best()?.first?.let { VisionFusion.nameFor(it) })
+        }
+        var id = (geo.maxOfOrNull { it.id } ?: 0) + 1
+        val extra = votes.entries.filter { e ->
+            e.cameraOnly && e.sightings >= 2 && (e.best()?.second ?: 0f) >= 1.1f && geo.none { it.center.dist(e.at) < 0.6f }
+        }.mapNotNull { e ->
+            val (label, total) = e.best() ?: return@mapNotNull null
+            val t = when (label) {
+                "couch" -> FurnitureType.SOFA; "chair" -> FurnitureType.CHAIR; "bed" -> FurnitureType.BED
+                "dining table" -> FurnitureType.DINING_TABLE; "potted plant" -> FurnitureType.PLANT
+                else -> return@mapNotNull null
+            }
+            // Square it to the nearest wall; the measured size is unknown, so use typical dimensions.
+            val ang = if (corners.size >= 2) Geo.edges(corners).minByOrNull { it.distanceTo(e.at) }!!.dir.angle() else 0f
+            DetectedObject(id++, e.at, t.defW, t.defD, ang, t.defH, t, 0.4f,
+                seenAs = "$label ${(100 * total / e.sightings).toInt().coerceAtMost(99)}%", color = e.color, fromCamera = true)
+        }
+        return refined + extra
+    }
+
+    private fun recognizedSummary(): List<String> = detected.mapNotNull { it.seenAs?.substringBeforeLast(' ') }
+        .groupingBy { it }.eachCount().map { (k, n) -> if (n > 1) "$k ×$n" else k }
+
     // ------------------------------------------------------------------ drawing
 
     private fun drawScene() {
@@ -575,6 +811,7 @@ class ArController : GLSurfaceView.Renderer {
 
         when (step) {
             ScanStep.PREVIEW, ScanStep.ALIGN -> drawPreview(fy)
+            ScanStep.PLACE -> drawPlacement(fy)
             else -> drawScan(fy)
         }
         // Reticle.
@@ -624,9 +861,15 @@ class ArController : GLSurfaceView.Renderer {
         }
         pending?.let { p -> pts.add(p.x, fy + 0.01f, p.y); reticle?.let { r -> seg(lines, p, r, fy + 0.01f) } }
 
-        // Furniture: auto-detected (amber) and manual (pink).
-        for (d in detected) box(lines, d.corners(), fy, fy + d.height)
+        // Furniture: depth-detected (amber, mint once the camera confirms it), camera-only (sky), manual (pink).
+        for (d in detected.filter { it.seenAs == null && !it.fromCamera }) box(lines, d.corners(), fy, fy + d.height)
         prims.lines(vp, lines.data, lines.vertices, 0xFFFFC94D, 6f)
+        lines.clear()
+        for (d in detected.filter { it.seenAs != null && !it.fromCamera }) box(lines, d.corners(), fy, fy + d.height)
+        prims.lines(vp, lines.data, lines.vertices, 0xFF2EE6A8, 6f)
+        lines.clear()
+        for (d in detected.filter { it.fromCamera }) box(lines, d.corners(), fy, fy + d.height)
+        prims.lines(vp, lines.data, lines.vertices, 0xFF64B5F6, 6f)
         lines.clear()
         for (m in manual) box(lines, m.corners, fy, fy + 0.8f)
         prims.lines(vp, lines.data, lines.vertices, 0xFFFF6FB5, 6f)
@@ -663,8 +906,10 @@ class ArController : GLSurfaceView.Renderer {
                 arrow(lines, from, to, fy + 0.02f)
             }
         }
-        prims.triangles(vp, tris.data, tris.vertices, 0x402EE6A8)
-        prims.lines(vp, lines.data, lines.vertices, 0xFF2EE6A8, 7f)
+        // Ghosts hide behind real furniture (depth occlusion) so they read as really "there".
+        val occ = if (depthOn) depthTex else null
+        prims.occluded(GLES20.GL_TRIANGLES, vp, view, tris.data, tris.vertices, 0x402EE6A8, occ, viewW, viewH)
+        prims.occluded(GLES20.GL_LINES, vp, view, lines.data, lines.vertices, 0xFF2EE6A8, occ, viewW, viewH, 7f)
         tris.clear(); lines.clear()
         // Current footprints in red so you can see what moves.
         for (c in room.furniture) {
@@ -675,6 +920,49 @@ class ArController : GLSurfaceView.Renderer {
         }
         prims.lines(vp, lines.data, lines.vertices, 0xFFFF5370, 5f)
         lines.clear()
+    }
+
+    /** The piece being placed, coloured by whether it fits where it stands. */
+    private fun drawPlacement(fy: Float) {
+        val item = placing ?: return
+        val a = placeAnchor
+        val at = if (a != null && a.trackingState == TrackingState.TRACKING) Vec2(a.pose.tx(), a.pose.tz()) else reticle ?: return
+        val rot = Math.toRadians(placeRotDeg.toDouble()).toFloat()
+        val ghost = Geo.rectCorners(at, item.width, item.depth, rot)
+        val (ok, _) = placementVerdict(ghost)
+        val col = when (ok) { true -> 0xFF2EE6A8; false -> 0xFFFF5370; null -> 0xFFFFC94D }
+        // Room outline + existing pieces, for context.
+        previewRoom?.takeIf { aligned }?.let { room ->
+            val ol = room.outline.map { toWorld(it) }
+            for (i in ol.indices) seg(lines, ol[i], ol[(i + 1) % ol.size], fy + 0.01f)
+            for (f in room.furniture) { val c = f.corners().map { toWorld(it) }; for (i in 0 until 4) seg(lines, c[i], c[(i + 1) % 4], fy + 0.01f) }
+            prims.lines(vp, lines.data, lines.vertices, 0x66FFFFFF, 3f)
+            lines.clear()
+        }
+        val top = fy + item.height
+        for (i in 0 until 4) quadV(tris, ghost[i], ghost[(i + 1) % 4], fy, top)
+        topQuad(tris, ghost, top)
+        box(lines, ghost, fy, top)
+        // Front edge marker: which way it faces.
+        val front = Vec2(0f, 1f).rotated(rot)
+        seg(lines, at, at + front * (item.depth / 2f + 0.25f), fy + 0.02f)
+        val occ = if (depthOn) depthTex else null
+        prims.occluded(GLES20.GL_TRIANGLES, vp, view, tris.data, tris.vertices, (0x55L shl 24) or (col and 0xFFFFFF), occ, viewW, viewH)
+        prims.occluded(GLES20.GL_LINES, vp, view, lines.data, lines.vertices, col, occ, viewW, viewH, 7f)
+        tris.clear(); lines.clear()
+        placedInPlan = if (aligned && previewRoom != null) toPlan(at) to Geo.normalizeDeg(placeRotDeg - Math.toDegrees(alignTheta.toDouble()).toFloat()) else null
+    }
+
+    /** true = fits, false = bumps into something / pokes through a wall, null = no room to check against. */
+    private fun placementVerdict(ghost: List<Vec2>): Pair<Boolean?, String> {
+        val room = previewRoom
+        if (room == null || !aligned) return null to "No room plan to check against — this just shows the size."
+        val outline = room.outline.map { toWorld(it) }
+        if (ghost.any { !Geo.pointInPolygon(it, outline) }) return false to "Pokes through a wall"
+        val hit = room.furniture.firstOrNull { f -> Geo.convexOverlap(ghost, f.corners().map { toWorld(it) }) }
+        if (hit != null) return false to "Bumps into the ${hit.name}"
+        val wallGap = Geo.edges(outline).minOf { w -> ghost.minOf { w.distanceTo(it) } }
+        return true to "Fits ✓ — ${(wallGap * 100).toInt()} cm from the nearest wall"
     }
 
     private fun seg(l: FloatList, a: Vec2, b: Vec2, y: Float) { l.add(a.x, y, a.y); l.add(b.x, y, b.y) }
@@ -722,6 +1010,7 @@ class ArController : GLSurfaceView.Renderer {
             ScanStep.FURNITURE -> if (pending == null) "Walk around your furniture slowly — boxes appear as it's detected. Missing one? Tap two opposite corners." else "Tap the opposite corner of the item"
             ScanStep.ALIGN -> if (alignTaps.isEmpty()) "Align: aim at the real corner A of the room and tap +" else "Now aim at corner B and tap +"
             ScanStep.PREVIEW -> "Green ghosts show where each piece goes. Red outlines = where they are now."
+            ScanStep.PLACE -> if (placeAnchor == null) "Aim the ring where it should go, then tap \"Put it here\"" else "Walk around it. Rotate, or tap \"Move here\" to shift it."
         }
         _state.value = _state.value.copy(
             step = step, tracking = true, message = msg, floorFound = !floorY.isNaN(),
@@ -730,6 +1019,18 @@ class ArController : GLSurfaceView.Renderer {
             openings = openings.toList(), openingType = openingType, pendingPoint = pending != null,
             detected = detected, manual = manual.toList(), coverage = accumulator.coveredArea(),
             alignPoints = alignTaps.size, aligned = aligned, error = null,
+            recognized = recognizedSummary(), visionReady = detector != null, visionMs = detector?.lastMillis ?: 0,
+            occlusion = depthOn && depthTex.ready && (step == ScanStep.PREVIEW || step == ScanStep.PLACE),
+            placing = placing?.name, placed = placeAnchor != null,
+            placeOk = placing?.let { item ->
+                val at = placeAnchor?.let { Vec2(it.pose.tx(), it.pose.tz()) } ?: reticle
+                at?.let { placementVerdict(Geo.rectCorners(it, item.width, item.depth, Math.toRadians(placeRotDeg.toDouble()).toFloat())).first }
+            },
+            placeStatus = placing?.let { item ->
+                val at = placeAnchor?.let { Vec2(it.pose.tx(), it.pose.tz()) } ?: reticle
+                at?.let { placementVerdict(Geo.rectCorners(it, item.width, item.depth, Math.toRadians(placeRotDeg.toDouble()).toFloat())).second } ?: "Find the floor first"
+            } ?: "",
+            placeRotation = placeRotDeg,
         )
     }
 }

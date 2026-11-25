@@ -214,6 +214,23 @@ object Geo {
         return d
     }
 
+    /**
+     * Best rigid 2D transform (rotation θ, translation t) with dst ≈ R(θ)·src + t, by least squares
+     * (2D Kabsch). Used to re-fit a scanned room onto ARCore anchors as tracking refines.
+     */
+    fun fitRigid(src: List<Vec2>, dst: List<Vec2>): Pair<Float, Vec2> {
+        require(src.size == dst.size && src.isNotEmpty())
+        val pc = src.fold(Vec2.ZERO) { a, p -> a + p } / src.size.toFloat()
+        val qc = dst.fold(Vec2.ZERO) { a, p -> a + p } / dst.size.toFloat()
+        var dot = 0f; var crs = 0f
+        for (i in src.indices) {
+            val a = src[i] - pc; val b = dst[i] - qc
+            dot += a dot b; crs += a cross b
+        }
+        val theta = if (abs(dot) < 1e-9f && abs(crs) < 1e-9f) 0f else atan2(crs, dot)
+        return theta to (qc - pc.rotated(theta))
+    }
+
     fun sqr(v: Float) = v * v
     fun clamp01(v: Float) = v.coerceIn(0f, 1f)
     fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t

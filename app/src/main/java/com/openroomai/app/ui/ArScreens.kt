@@ -189,6 +189,12 @@ fun ScanScreen(controller: ArController, onDone: (Room) -> Unit, onBack: () -> U
             if (st.depthSupported && st.step == ScanStep.FURNITURE) {
                 MessagePill("Depth sensing on · ${"%.1f".format(st.coverage)} m² mapped")
             }
+            if (st.step == ScanStep.FURNITURE && st.visionReady) {
+                MessagePill(
+                    if (st.recognized.isEmpty()) "📷 Camera is looking for sofas, chairs, beds, tables…"
+                    else "📷 Recognised: " + st.recognized.joinToString(", "),
+                )
+            }
         }
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
@@ -301,6 +307,7 @@ fun PreviewScreen(controller: ArController, room: Room, target: List<Furniture>,
                 }
             }
             MessagePill(error ?: st.message, warn = error != null || !st.tracking)
+            if (st.occlusion) MessagePill("👓 Real furniture now hides the ghosts (depth occlusion)")
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
             if (st.step == ScanStep.ALIGN) {
@@ -333,6 +340,77 @@ fun PreviewScreen(controller: ArController, room: Room, target: List<Furniture>,
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** "Place it in AR": walk a piece around the real room at true size before buying or moving it. */
+@Composable
+fun PlaceScreen(
+    controller: ArController,
+    item: com.openroomai.app.model.Furniture,
+    room: Room?,
+    onAdd: (com.openroomai.app.model.Vec2, Float) -> Unit,
+    onBack: () -> Unit,
+) {
+    val st by controller.state.collectAsStateWithLifecycle()
+    var error by remember { mutableStateOf<String?>(null) }
+    remember(item.id) { controller.startPlacement(item, room); 0 }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        ArView(controller, onError = { error = it }, modifier = Modifier.fillMaxSize())
+        if (st.step == ScanStep.ALIGN || !st.placed) Crosshair()
+        Column(
+            Modifier.fillMaxWidth().statusBarsPadding().padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack, colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.5f))) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                }
+                Spacer(Modifier.width(10.dp))
+                Text("${item.type.emoji} ${item.name} · ${(item.width * 100).toInt()}×${(item.depth * 100).toInt()} cm", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            }
+            MessagePill(error ?: st.message, warn = error != null || !st.tracking)
+            if (st.step == ScanStep.PLACE && st.placeStatus.isNotEmpty()) {
+                val col = when (st.placeOk) { true -> Palette.Mint; false -> Palette.Coral; null -> Palette.Amber }
+                Text(
+                    st.placeStatus, color = Color.Black, style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(col).padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+            if (st.occlusion) MessagePill("👓 Depth occlusion on")
+        }
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
+                .padding(12.dp).clip(RoundedCornerShape(24.dp)).background(Color.Black.copy(alpha = 0.65f)).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (st.step == ScanStep.ALIGN) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilledIconButton(onClick = { controller.undo() }, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Palette.SurfaceHi)) {
+                        Icon(Icons.AutoMirrored.Filled.Undo, "Undo", tint = Color.White)
+                    }
+                    Button(onClick = { controller.addAtReticle() }, enabled = st.reticleOnFloor, modifier = Modifier.weight(1f).height(56.dp)) {
+                        Text(if (st.alignPoints == 0) "This is corner A" else "This is corner B")
+                    }
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilledTonalButton(onClick = { controller.rotatePlacement(-15f) }) { Text("⟲ 15°") }
+                    Button(onClick = { controller.placeAtReticle() }, enabled = st.reticleOnFloor, modifier = Modifier.weight(1f).height(56.dp)) {
+                        Text(if (st.placed) "Move here" else "Put it here")
+                    }
+                    FilledTonalButton(onClick = { controller.rotatePlacement(15f) }) { Text("15° ⟳") }
+                }
+                if (room != null) Button(
+                    onClick = { controller.placedInPlan?.let { (c, r) -> onAdd(c, r) } ?: run { error = "Put it down first" } },
+                    enabled = st.placed && st.placeOk != false,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Palette.Mint, contentColor = Color.Black),
+                ) { Text("Add to the plan right here") }
             }
         }
     }

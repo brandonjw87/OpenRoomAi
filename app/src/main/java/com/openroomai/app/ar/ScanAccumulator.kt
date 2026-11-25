@@ -16,6 +16,13 @@ data class DetectedObject(
     val height: Float,
     val guess: FurnitureType,
     val confidence: Float,
+    /** What the camera model recognised it as, e.g. "couch 82%". */
+    val seenAs: String? = null,
+    /** Average colour seen by the camera (ARGB). */
+    val color: Long? = null,
+    /** Added from camera sightings alone (the depth scan missed it). */
+    val fromCamera: Boolean = false,
+    val name: String? = null,
 ) {
     fun corners() = Geo.rectCorners(center, width, depth, angleRad)
 }

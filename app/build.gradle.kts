@@ -13,8 +13,8 @@ android {
         applicationId = "com.openroomai.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 167
+        versionName = "1.67"
     }
 
     buildTypes {
@@ -30,6 +30,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // Memory-map the detector model straight out of the APK.
+    androidResources { noCompress += "tflite" }
     testOptions {
         unitTests.isReturnDefaultValues = true
         unitTests.isIncludeAndroidResources = true
@@ -54,6 +56,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("com.google.ar:core:1.46.0")
+    // On-device furniture recognition (EfficientDet-Lite0, COCO). 16 KB page aligned.
+    implementation("com.google.ai.edge.litert:litert:1.4.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

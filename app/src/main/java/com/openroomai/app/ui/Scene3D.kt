@@ -156,7 +156,7 @@ object Scene3D {
     /** Recognizable low-poly shapes per furniture type, in furniture-local coords. */
     private fun parts(f: Furniture): List<Part> {
         val w = f.width; val d = f.depth; val h = f.height
-        val c = Color(f.type.colorArgb)
+        val c = Color(f.displayArgb)
         val dark = Color(c.red * 0.7f, c.green * 0.7f, c.blue * 0.7f)
         val wood = Color(0xFF9C7A54)
         val white = Color(0xFFF2F2F2)

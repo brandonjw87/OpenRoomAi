@@ -25,4 +25,5 @@ enum class LayoutGoal(
     WORK_FROM_HOME("Work from home", "💻", "Desk gets side daylight and stays out of the traffic path.", SQUEEZE_RADIUS, 9f, 0f, 1f),
     PARTY("Party mode", "🎉", "Everything to the walls. Maximum dance floor.", SQUEEZE_RADIUS, 15f, 2.5f, 0.35f),
     ACCESSIBLE("Wheelchair friendly", "♿", "90 cm paths everywhere and a 1.5 m turning circle.", COMFORT_RADIUS, 11f, 0f, 0.8f),
+    EASY_LIVING("Grandparents & easy living", "🧓", "Walker-width 90 cm paths, a 1.5 m turning space, a sturdy seat near the door, nothing low to trip over on the way, and a clear side to get out of bed.", COMFORT_RADIUS, 12f, 0f, 0.8f),
 }

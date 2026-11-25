@@ -41,6 +41,8 @@ data class OpennessReport(
 
     val label: String
         get() = when {
+            // The kids' favourite number. Its meaning is that it has no meaning — like a 67 room: perfectly mid.
+            score == 67 -> "Six… seven 🤲"
             score >= 85 -> "Airy ✨"
             score >= 70 -> "Open"
             score >= 55 -> "Comfortable"

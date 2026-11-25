@@ -11,6 +11,8 @@ import com.openroomai.app.engine.DeclutterAction
 import com.openroomai.app.engine.DeclutterCoach
 import com.openroomai.app.engine.DeclutterIdea
 import com.openroomai.app.engine.Effort
+import com.openroomai.app.engine.FallSafety
+import com.openroomai.app.engine.FallSafetyReport
 import com.openroomai.app.engine.LayoutGoal
 import com.openroomai.app.engine.MirrorSpot
 import com.openroomai.app.engine.OpenLook
@@ -31,6 +33,7 @@ import com.openroomai.app.model.Furniture
 import com.openroomai.app.model.Geo
 import com.openroomai.app.model.Opening
 import com.openroomai.app.model.Room
+import com.openroomai.app.model.Vec2
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -46,6 +49,8 @@ sealed interface Screen {
     data object Preview : Screen
     data object ThreeD : Screen
     data object Moving : Screen
+    data object Place : Screen
+    data object DeviceCheck : Screen
 }
 
 /** Moving Day: pieces brought in from other rooms, placed by the optimizer. */
@@ -109,7 +114,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun back(): Boolean = when (screen) {
         Screen.Home -> false
-        Screen.Preview, Screen.ThreeD, Screen.Moving -> { screen = Screen.Plan; true }
+        Screen.Preview, Screen.ThreeD, Screen.Moving, Screen.Place -> { screen = Screen.Plan; true }
+        Screen.DeviceCheck -> { screen = Screen.Home; true }
         else -> { screen = Screen.Home; refresh(); true }
     }
 
@@ -401,4 +407,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun otherRooms(): List<Room> = rooms.value.filter { it.id != room?.id && it.furniture.isNotEmpty() }
+
+    // ------------------------------------------------------------ easy living (grandparents)
+
+    var fallSafety by mutableStateOf<FallSafetyReport?>(null)
+        private set
+    private var safetyJob: Job? = null
+
+    fun refreshSafety(layout: List<Furniture>) {
+        val r = room ?: return
+        safetyJob?.cancel()
+        safetyJob = viewModelScope.launch {
+            delay(80)
+            fallSafety = withContext(Dispatchers.Default) { FallSafety.audit(r, layout) }
+        }
+    }
+
+    /** One tap: switch the room to the grandparents goal and re-plan. */
+    fun optimizeForEasyLiving() {
+        setGoal(LayoutGoal.EASY_LIVING)
+        effort = Effort.BALANCED
+        optimize()
+    }
+
+    // ------------------------------------------------------------ place it in AR
+
+    var placingItem by mutableStateOf<Furniture?>(null)
+        private set
+
+    fun startPlacement(item: Furniture) { placingItem = item }
+
+    /** Drop the AR-placed piece into the plan where it was standing. */
+    fun addPlaced(center: Vec2, rotationDeg: Float) {
+        val item = placingItem ?: return
+        addFurniture(item.copy(center = center, rotationDeg = rotationDeg, isNew = true))
+        toast = "${item.name} added where you put it in AR 📱"
+        placingItem = null
+        screen = Screen.Plan
+    }
 }

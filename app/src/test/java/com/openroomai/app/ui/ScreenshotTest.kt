@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -120,6 +121,7 @@ class ScreenshotTest {
     }
 
     @Test
+    @Config(qualifiers = "w411dp-h5600dp-xxhdpi")
     fun openLookStudioAndMirrorIn3D() {
         val vm = AppViewModel(rule.activity.application)
         rule.mainClock.autoAdvance = false
@@ -136,7 +138,6 @@ class ScreenshotTest {
         vm.addMirror(vm.mirrorSpots.first())
         vm.setPaint(com.openroomai.app.engine.OpenLook.PAINTS[3])
         waitFor(10_000) { vm.room?.mirrors?.isNotEmpty() == true }
-        rule.onNodeWithText("🪞 Open-Look Studio").performScrollTo()
         snap("openlook_card")
         show3d = true
         snap("openlook_3d")
@@ -171,5 +172,39 @@ class ScreenshotTest {
         snap("openlook_3d_door")
         view = Viewpoint.Dollhouse
         snap("openlook_3d_mirror")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h4200dp-xxhdpi")
+    fun easyLivingForGrandparents() {
+        val vm = AppViewModel(rule.activity.application)
+        rule.mainClock.autoAdvance = false
+        rule.setContent { OpenRoomTheme { PlanScreen(vm, true, {}, {}) } }
+        vm.openDemo()
+        waitFor(30_000) { vm.report != null && vm.fallSafety != null }
+        snap("easy_before")
+        rule.onNodeWithText("🧓 Rearrange for easy living").performClick()
+        waitFor(180_000) { vm.result != null && vm.progress == null }
+        waitFor(30_000) { vm.fallSafety != null }
+        snap("easy_after")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun deviceCheckAndBigTextHome() {
+        var screen by androidx.compose.runtime.mutableStateOf("check")
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            OpenRoomTheme {
+                if (screen == "check") DeviceCheckScreen(onBack = {}, probeAr = false)
+                else androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(androidx.compose.ui.platform.LocalDensity.current.density, 1.3f),
+                ) { HomeScreen(listOf(RoomRepository.demoRoom()), true, {}, { _, _, _ -> }, {}, {}, {}, bigText = true) }
+            }
+        }
+        waitFor(120_000) { rule.onAllNodesWithText("Mirror finder").fetchSemanticsNodes().isNotEmpty() }
+        snap("device_check")
+        screen = "home"
+        snap("home_bigtext")
     }
 }

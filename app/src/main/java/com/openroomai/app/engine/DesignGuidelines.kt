@@ -49,7 +49,7 @@ object DesignGuidelines {
      * colour stands in for darkness (dark = heavy).
      */
     fun visualWeight(f: Furniture): Float {
-        val c = f.type.colorArgb
+        val c = f.displayArgb
         val r = (c shr 16 and 0xFF) / 255f; val g = (c shr 8 and 0xFF) / 255f; val b = (c and 0xFF) / 255f
         val lum = 0.2126f * r + 0.7152f * g + 0.0722f * b
         return f.footprint() * (0.4f + f.height) * (1.25f - 0.6f * lum)

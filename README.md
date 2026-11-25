@@ -89,6 +89,45 @@ Ends with numbered labels and a shareable checklist for the movers.
 - **Design check:** conversation, visual balance (which wall it's heavy toward), alignment and
   focal point, with before → after in the results.
 
+## v1.67 — the Open Area Edition (six… seven 🤲)
+Built for an 80-year-old grandparents' house: lots of open area, nothing to trip on.
+
+### 🧓 Easy living (aging in place)
+- New **"Grandparents & easy living"** goal: 90 cm (36 in) walker-width paths, a 1.5 m (60 in)
+  turning space, a sturdy seat within two steps of the door, nothing shin-height on the way, and
+  a 90 cm clear side to get out of bed. The full audit also judges the finished candidates.
+- **Easy living check** (`engine/FallSafety.kt`): walker reachability, where paths pinch, low
+  pieces on the straight *desire lines* people actually walk (not the planner's detour),
+  door-swing clutter, bed exit side, seat by the door, anchoring tall pieces, plus the CDC
+  checklist basics a plan can't see (rugs, seat height 46–59 cm with armrests, a phone reachable
+  from the floor). Demo room: fall-safety score 0 → 76 after "Rearrange for easy living".
+- **Night path:** a lit route from the bed (or sofa) to the door with 💡 night-light spots at the
+  start, the turns and the door.
+- **Big text** mode ("Aa" on the home screen) scales every text by 30 %.
+
+### 📷 Judging furniture in pictures
+- On-device **EfficientDet-Lite0 (COCO)** on **LiteRT 1.4.0** (16 KB-page aligned), fed from
+  ARCore's camera image about once a second during the furniture scan, off the render thread.
+- Tested on real indoor photos first: couches 0.65–0.71, beds 0.72–0.84, chairs up to 0.82 —
+  but a dresser came back as "refrigerator" and a staircase as "bench". So the camera only
+  **votes**: detections must line up with a depth cluster's projected box, votes accumulate over
+  frames, and the measured size/height decides (a "refrigerator" under 1.3 m is a dresser;
+  "books" inside a tall box make it a bookshelf). Strong repeated sightings the depth scan
+  missed (thin chairs, dark sofas) are added as camera-only pieces.
+- Furniture keeps its **real colour** from the photo — in the plan, 3D, the GIF and visual balance.
+
+### 📱 Placing objects in AR
+- **ARCore anchors** for every room corner; the AR preview is re-fitted to them every frame
+  (2D Kabsch), so ghosts stay glued to the room as tracking refines (Google: always use anchors).
+- **Depth occlusion:** ghost furniture fades behind real objects (depth texture + shader,
+  12 cm soft band).
+- **Place it in AR:** walk a piece you're thinking of buying around the real room at true size;
+  live "Fits ✓ / Bumps into the Sofa / Pokes through a wall", rotate, then "Add to the plan".
+
+### 📲 Device check
+Measures the phone (ARCore depth / raw depth, depth sensor, page size, camera-recognition speed,
+optimizer and safety-check timings) and shares a report — real-device data for tuning.
+
 Also: sketch mode for phones without ARCore, demo room, lock pieces in place, 3 effort levels
 (Quick tidy / Balanced / Full redesign), before→after morph animation, progress checklist, and
 share the plan as an image + text checklist.

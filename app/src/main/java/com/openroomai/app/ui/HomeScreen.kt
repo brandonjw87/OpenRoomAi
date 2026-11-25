@@ -58,6 +58,9 @@ fun HomeScreen(
     onDemo: () -> Unit,
     onOpen: (Room) -> Unit,
     onDelete: (Room) -> Unit,
+    bigText: Boolean = false,
+    onToggleBigText: () -> Unit = {},
+    onDeviceCheck: () -> Unit = {},
 ) {
     var sketchDialog by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Room?>(null) }
@@ -69,7 +72,11 @@ fun HomeScreen(
     ) {
         item {
             Column(Modifier.padding(vertical = 8.dp)) {
-                Text("OpenRoom AI", style = MaterialTheme.typography.displaySmall, color = Palette.Text)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("OpenRoom AI", style = MaterialTheme.typography.displaySmall, color = Palette.Text, modifier = Modifier.weight(1f))
+                    // Bigger type for grandparents (and anyone without their glasses).
+                    OutlinedButton(onClick = onToggleBigText) { Text(if (bigText) "Aa ✓" else "Aa") }
+                }
                 Text("Same room. Same stuff. Way more space.", color = Palette.Muted)
             }
         }
@@ -116,6 +123,13 @@ fun HomeScreen(
             )
         }
         items(rooms, key = { it.id }) { r -> RoomCard(r, { onOpen(r) }, { confirmDelete = r }) }
+        item {
+            Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                TextButton(onClick = onDeviceCheck) { Text("📲 Device check — test what this phone can do") }
+                // Version 1.67. Six… seven. 🤲 (It means nothing. That's the joke.)
+                Text("v1.67 · Open Area Edition · six… seven 🤲", color = Palette.Muted.copy(alpha = 0.7f), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         item { Spacer(Modifier.height(40.dp)) }
     }
 

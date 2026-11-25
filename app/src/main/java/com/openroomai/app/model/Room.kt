@@ -68,7 +68,14 @@ data class Furniture(
     val name: String = type.label,
     /** True when added through "Will it fit?" and not yet owned. */
     val isNew: Boolean = false,
+    /** Real colour sampled from the camera during an AR scan (ARGB); null = type colour. */
+    val color: Long? = null,
+    /** What the on-device camera model recognised, e.g. "couch 82%". */
+    val seenAs: String? = null,
 ) {
+    /** Colour to draw it with: what the camera saw, else the type's colour. */
+    val displayArgb: Long get() = color ?: type.colorArgb
+
     val angleRad get() = (rotationDeg * PI / 180.0).toFloat()
     fun corners(): List<Vec2> = Geo.rectCorners(center, width, depth, angleRad)
     /** Unit vector the furniture "faces" (its usable side). */

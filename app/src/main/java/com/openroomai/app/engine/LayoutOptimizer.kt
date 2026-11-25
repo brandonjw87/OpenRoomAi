@@ -116,17 +116,21 @@ class LayoutOptimizer(
         var bestLayout = start
         var bestCost = Float.MAX_VALUE
         for (c in candidates) {
-            val fine = totalCost(reference, c, fineGrid) + selectWeight * DesignGuidelines.cost(room, c, goal.relationScale.coerceIn(0.3f, 1.2f))
+            val fine = totalCost(reference, c, fineGrid) + selectWeight * DesignGuidelines.cost(room, c, goal.relationScale.coerceIn(0.3f, 1.2f)) + safetyCost(c)
             if (fine < bestCost) { bestCost = fine; bestLayout = c }
         }
 
         val polished = bestLayout.map { snapTidy(it, bestLayout) }
-        val polishedCost = totalCost(reference, polished, fineGrid) + selectWeight * DesignGuidelines.cost(room, polished, goal.relationScale.coerceIn(0.3f, 1.2f))
+        val polishedCost = totalCost(reference, polished, fineGrid) + selectWeight * DesignGuidelines.cost(room, polished, goal.relationScale.coerceIn(0.3f, 1.2f)) + safetyCost(polished)
         val finalLayout = if (polishedCost <= bestCost) polished else bestLayout
         val after = OpennessAnalyzer.analyze(room, finalLayout, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
         onProgress(1f)
         return OptimizeResult(finalLayout, before, after, violations(finalLayout))
     }
+
+    /** Easy living: the full fall-safety audit judges the finished candidates (too slow for every step). */
+    private fun safetyCost(layout: List<Furniture>): Float =
+        if (goal != LayoutGoal.EASY_LIVING) 0f else 0.08f * (100 - FallSafety.audit(room, layout).score)
 
     private fun anneal(original: List<Furniture>, start: List<Furniture>, iters: Int, t0: Float, tick: (Int) -> Unit): Pair<List<Furniture>, Float> {
         val cur = start.toMutableList()
@@ -250,7 +254,9 @@ class LayoutOptimizer(
         // Furniture you can't walk up to is useless, however open the room looks.
         val unreachable = (1f - rep.accessPct) * layout.size
         var goalOpen = goal.clearBonus * rep.clearDiameter
-        if (goal == LayoutGoal.ACCESSIBLE) goalOpen -= 6f * max(0f, TURNING_DIAMETER - rep.clearDiameter)
+        if (goal == LayoutGoal.ACCESSIBLE || goal == LayoutGoal.EASY_LIVING) goalOpen -= 6f * max(0f, TURNING_DIAMETER - rep.clearDiameter)
+        // Easy living: somewhere sturdy to sit within a couple of steps of the door (shoes, groceries, catching breath).
+        if (goal == LayoutGoal.EASY_LIVING && layout.none { FallSafety.isSeat(it) && it.center.dist(room.entryPoint()) <= FallSafety.SEAT_NEAR_DOOR }) goalOpen -= 0.6f
         return hard * 10f + soft + unreachable * 2.5f - open * goal.openWeight - goalOpen
     }
 
@@ -275,6 +281,21 @@ class LayoutOptimizer(
                     }
                 }
                 else -> {}
+            }
+            LayoutGoal.EASY_LIVING -> {
+                // Shin-height pieces near the way in are the classic trip / walker snag.
+                if (f.height < 0.6f && f.type != FurnitureType.BED) {
+                    val d = f.corners().minOf { it.dist(room.entryPoint()) }
+                    if (d < 1.2f) c += 0.8f * (1.2f - d) / 1.2f
+                }
+                // Nothing low on the straight line from the door to anywhere people go.
+                if (f.height <= FallSafety.TRIP_HEIGHT) for ((d, line) in FallSafety.desireLines(room, layout)) {
+                    if (FallSafety.blocksLine(f, d, line)) c += 0.9f
+                }
+                // A 90 cm clear side to get out of bed (pick the better side).
+                if (f.type == FurnitureType.BED) c += 1.5f * FallSafety.bedExitObstruction(room, f, layout)
+                // People steady themselves on furniture: tall pieces flat against a wall (anchorable).
+                if (f.height >= 1.2f) c += 0.5f * wallMisfit(f)
             }
             LayoutGoal.WORK_FROM_HOME -> if (f.type == FurnitureType.DESK) {
                 val w = room.windows().minByOrNull { room.openingSegment(it).distanceTo(f.center) }
