@@ -124,4 +124,23 @@ class EngineTest {
         val after = OpennessAnalyzer.analyze(room, changed, 0.05f).score
         assertEquals(top.gain, after - before)
     }
+
+    @Test
+    fun designGuidelinesImproveWithOptimization() {
+        val room = RoomRepository.demoRoom()
+        val before = DesignGuidelines.check(room, room.furniture)
+        val res = LayoutOptimizer(room, Effort.BALANCED, 11L).optimize(room.furniture)
+        val after = DesignGuidelines.check(room, res.layout)
+        println("design check: ${before.score} -> ${after.score} (conv ${before.conversation}->${after.conversation}, balance ${before.imbalance}->${after.imbalance}, align ${before.alignment}->${after.alignment}, emph ${before.emphasis}->${after.emphasis})")
+        assertTrue(after.score > before.score)
+        assertTrue("angled pieces get squared up", after.alignment > before.alignment)
+        // A lopsided room: everything heavy against one wall.
+        val lop = com.openroomai.app.model.Room.rectangle("lop", 5f, 4f).copy(furniture = listOf(
+            Furniture(type = FurnitureType.WARDROBE, center = Vec2(0.35f, 1f), rotationDeg = 90f),
+            Furniture(type = FurnitureType.BOOKSHELF, center = Vec2(0.2f, 2.5f), rotationDeg = 90f),
+            Furniture(type = FurnitureType.SOFA, center = Vec2(0.5f, 3.4f), rotationDeg = 90f),
+        ))
+        val ck = DesignGuidelines.check(lop, lop.furniture)
+        assertEquals("heavy side is Wall D (x = 0)", 3, ck.heavyWall)
+    }
 }

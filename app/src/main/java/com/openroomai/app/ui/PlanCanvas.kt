@@ -131,6 +131,8 @@ fun PlanCanvas(
     modifier: Modifier = Modifier,
     layers: Layers = Layers(),
     sun: SunReport? = null,
+    /** Open-Look Studio suggestions, drawn as numbered dashed panes. */
+    mirrorSpots: List<com.openroomai.app.engine.MirrorSpot> = emptyList(),
     ghost: List<Furniture>? = null,
     selectedId: String? = null,
     highlightId: String? = null,
@@ -189,6 +191,7 @@ fun PlanCanvas(
         val tr = PlanTransform(room, size, pad)
         drawPlan(this, tr, room, layout, report, layers, ghost, selectedId, highlightId, heat, sight, measurer, compact)
         if (sunImg != null && sun != null) drawSun(tr, room, sun, sunImg, layers.sunHours, measurer)
+        drawMirrors(tr, room, mirrorSpots, measurer, compact)
         if (!compact && room.northDeg != null) drawCompass(room.northDeg, measurer)
     }
 }
@@ -404,4 +407,26 @@ private fun DrawScope.drawCompass(northDeg: Float, measurer: TextMeasurer) {
     drawLine(Color.White.copy(alpha = 0.7f), c, tail, strokeWidth = 4f, cap = StrokeCap.Round)
     val t = measurer.measure("N", TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold))
     drawText(t, topLeft = Offset(tip.x + n.x * 2f - t.size.width / 2f, tip.y + n.y * 2f - t.size.height / 2f - 10f * (1f - kotlin.math.abs(n.x))))
+}
+
+/** Hung mirrors (solid silver) and suggested spots (dashed, numbered). */
+private fun DrawScope.drawMirrors(tr: PlanTransform, room: Room, spots: List<com.openroomai.app.engine.MirrorSpot>, measurer: TextMeasurer, compact: Boolean) {
+    val silver = Color(0xFFCFE0EC)
+    for (m in room.mirrors) {
+        val s = room.mirrorSegment(m)
+        val n = room.inwardNormal(m.wallIndex) * (6f / tr.scale)
+        drawLine(silver, tr.toScreen(s.a + n), tr.toScreen(s.b + n), strokeWidth = if (compact) 3f else 7f, cap = StrokeCap.Round)
+    }
+    if (compact) return
+    spots.forEachIndexed { i, sp ->
+        val s = room.mirrorSegment(sp.mirror)
+        val n = room.inwardNormal(sp.mirror.wallIndex)
+        val off = n * (8f / tr.scale)
+        drawLine(Palette.Sky, tr.toScreen(s.a + off), tr.toScreen(s.b + off), strokeWidth = 6f, cap = StrokeCap.Round,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 7f)))
+        val c = tr.toScreen(s.pointAt(0.5f) + n * (30f / tr.scale))
+        drawCircle(Palette.Sky, 13f, c)
+        val t = measurer.measure("${i + 1}", TextStyle(color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Black))
+        drawText(t, topLeft = Offset(c.x - t.size.width / 2f, c.y - t.size.height / 2f))
+    }
 }

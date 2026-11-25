@@ -86,6 +86,7 @@ fun Room3DScreen(
     modifier: Modifier = Modifier,
     initialView: Viewpoint = Viewpoint.Dollhouse,
     initialAfter: Boolean = optimized != null,
+    initialYaw: Float = 0.55f,
 ) {
     var after by remember { mutableStateOf(initialAfter && optimized != null) }
     var view by remember { mutableStateOf(initialView) }
@@ -95,7 +96,7 @@ fun Room3DScreen(
 
     val b = Geo.bounds(room.outline)
     val target = Geo.centroid(room.outline).at(0.5f)
-    var yaw by remember { mutableFloatStateOf(0.55f) }
+    var yaw by remember { mutableFloatStateOf(initialYaw) }
     var pitch by remember { mutableFloatStateOf(0.75f) }
     var dist by remember { mutableFloatStateOf(maxOf(b.width, b.height) * 1.2f + 1.2f) }
     // First-person look offsets (added to the viewpoint's natural heading).

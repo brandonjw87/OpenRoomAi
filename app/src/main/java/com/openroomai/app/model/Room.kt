@@ -128,6 +128,21 @@ data class Opening(
     val width: Float,
 )
 
+/** A wall mirror (Open-Look Studio), hung between [bottom] and [top] meters. */
+@Serializable
+data class Mirror(
+    val id: String = UUID.randomUUID().toString(),
+    val wallIndex: Int,
+    val t: Float,
+    val width: Float,
+    val bottom: Float = 0.7f,
+    val top: Float = 1.9f,
+)
+
+/** Wall paint with its Light Reflectance Value (0–100: share of light the colour bounces back). */
+@Serializable
+data class Paint(val name: String, val argb: Long, val lrv: Int)
+
 @Serializable
 data class Room(
     val id: String = UUID.randomUUID().toString(),
@@ -150,6 +165,12 @@ data class Room(
     val northDeg: Float? = null,
     /** Latitude for sun simulation; null = not set (a default is used). */
     val latitude: Float? = null,
+    /** Open-Look Studio: mirrors you've decided to hang. */
+    val mirrors: List<Mirror> = emptyList(),
+    /** Open-Look Studio: wall colour; null = default light grey. */
+    val paint: Paint? = null,
+    /** Ceiling height (m), used for tilting long pieces around hallway corners. */
+    val ceilingHeight: Float = 2.45f,
 ) {
     val area get() = Geo.absArea(outline)
     fun walls(): List<Segment> = Geo.edges(outline)
@@ -162,6 +183,8 @@ data class Room(
         val mid = w.pointAt(0.5f)
         return if (Geo.pointInPolygon(mid + n * 0.05f, outline)) n else -n
     }
+
+    fun mirrorSegment(m: Mirror): Segment = openingSegment(Opening(type = OpeningType.WINDOW, wallIndex = m.wallIndex, t = m.t, width = m.width))
 
     fun openingSegment(o: Opening): Segment {
         val w = walls()[o.wallIndex.coerceIn(0, outline.size - 1)]

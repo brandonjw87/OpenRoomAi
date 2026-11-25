@@ -36,6 +36,7 @@ import com.openroomai.app.ui.HomeScreen
 import com.openroomai.app.ui.OpenRoomTheme
 import com.openroomai.app.ui.Palette
 import com.openroomai.app.ui.PlanScreen
+import com.openroomai.app.ui.MovingScreen
 import com.openroomai.app.ui.PreviewScreen
 import com.openroomai.app.ui.Room3DScreen
 import com.openroomai.app.ui.ScanScreen
@@ -104,7 +105,8 @@ private fun App(vm: AppViewModel, ar: ArController) {
                     onDelete = { vm.delete(it) },
                 )
                 Screen.Scan -> ScanScreen(ar, onDone = { vm.saveScanned(it) }, onBack = { vm.back() })
-                Screen.Plan -> PlanScreen(vm, arSupported, onBack = { vm.back() }, onPreview = { withCamera(Screen.Preview) }, onOpen3D = { vm.go(Screen.ThreeD) })
+                Screen.Plan -> PlanScreen(vm, arSupported, onBack = { vm.back() }, onPreview = { withCamera(Screen.Preview) }, onOpen3D = { vm.go(Screen.ThreeD) }, onOpenMoving = { vm.refresh(); vm.go(Screen.Moving) })
+                Screen.Moving -> MovingScreen(vm, onBack = { vm.back() })
                 Screen.ThreeD -> vm.room?.let { r ->
                     Room3DScreen(r, r.furniture, vm.result?.layout, vm.report, vm.result?.after, onBack = { vm.back() })
                 } ?: LaunchedEffect(Unit) { vm.back() }

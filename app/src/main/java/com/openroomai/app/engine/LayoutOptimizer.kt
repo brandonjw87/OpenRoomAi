@@ -44,6 +44,14 @@ class LayoutOptimizer(
     private val goal: LayoutGoal = LayoutGoal.EVERYDAY,
 ) {
     private val baseSeed = seed
+    /**
+     * Weight of the interior-design guideline terms *during* the search. Measured on the demo
+     * room, adding them inside the anneal made both openness and design worse (a bumpier cost
+     * landscape), so by default they only judge the finished candidates — see [selectWeight].
+     */
+    var designWeight = 0f
+    /** Weight of the design guidelines when picking the best of the finished candidates. */
+    var selectWeight = 1.0f
     private val rnd = Random(seed)
     private val walls = room.walls()
     private val normals = walls.indices.map { room.inwardNormal(it) }
@@ -94,6 +102,7 @@ class LayoutOptimizer(
                 pool.submit(Callable {
                     // Each chain owns its grid and RNG, so chains never share mutable state.
                     val worker = LayoutOptimizer(room, effort, baseSeed * 1_000_003L + k * 7919L, goal)
+                    worker.designWeight = designWeight
                     val seedLayout = if (k == 0) start else worker.wallSeed(start)
                     val (layout, _) = worker.anneal(reference, seedLayout, explore, 2.0f, tick)
                     worker.anneal(reference, layout, refine, 0.2f, tick).first
@@ -107,12 +116,13 @@ class LayoutOptimizer(
         var bestLayout = start
         var bestCost = Float.MAX_VALUE
         for (c in candidates) {
-            val fine = totalCost(reference, c, fineGrid)
+            val fine = totalCost(reference, c, fineGrid) + selectWeight * DesignGuidelines.cost(room, c, goal.relationScale.coerceIn(0.3f, 1.2f))
             if (fine < bestCost) { bestCost = fine; bestLayout = c }
         }
 
         val polished = bestLayout.map { snapTidy(it, bestLayout) }
-        val finalLayout = if (totalCost(reference, polished, fineGrid) <= bestCost) polished else bestLayout
+        val polishedCost = totalCost(reference, polished, fineGrid) + selectWeight * DesignGuidelines.cost(room, polished, goal.relationScale.coerceIn(0.3f, 1.2f))
+        val finalLayout = if (polishedCost <= bestCost) polished else bestLayout
         val after = OpennessAnalyzer.analyze(room, finalLayout, OccupancyGrid(room, 0.05f), withFlows = true, walkRadius = goal.walkRadius)
         onProgress(1f)
         return OptimizeResult(finalLayout, before, after, violations(finalLayout))
@@ -233,6 +243,8 @@ class LayoutOptimizer(
                 if (moved > 0.05f || rotated > 0.05f) soft += effort.movePenalty * (0.3f + moved + 0.3f * rotated) * sizeFactor(f)
             }
         }
+        // Interior-design guidelines (conversation, balance, alignment, emphasis).
+        if (designWeight > 0f) soft += DesignGuidelines.cost(room, layout, goal.relationScale.coerceIn(0.3f, 1.2f) * designWeight)
         val rep = OpennessAnalyzer.analyze(room, layout, g, withFlows = false, walkRadius = goal.walkRadius)
         val open = rep.score / 100f
         // Furniture you can't walk up to is useless, however open the room looks.

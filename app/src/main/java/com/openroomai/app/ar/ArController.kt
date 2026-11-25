@@ -462,45 +462,108 @@ class ArController : GLSurfaceView.Renderer {
             }
         } catch (_: Exception) {}
 
-        if (!depthOn || frameNo % 3 != 0L) return
-        try {
-            frame.acquireDepthImage16Bits().use { img ->
-                val plane = img.planes[0]
+        if (!depthOn || frameNo % 2 != 0L) return
+        // Prefer Raw Depth + its confidence image (as in Google's ARCore Raw Depth codelab):
+        // fewer points, but each one is trustworthy. Fall back to smoothed depth if unavailable.
+        val ok = rawDepthOk && try {
+            accumulateDepth(frame, raw = true)
+        } catch (_: NotYetAvailableException) {
+            true
+        } catch (e: Exception) {
+            rawDepthOk = false // this device/config has no raw depth: stop asking every frame
+            false
+        }
+        if (!ok) try {
+            accumulateDepth(frame, raw = false)
+        } catch (_: NotYetAvailableException) {
+        } catch (e: Exception) {
+            Log.w("OpenRoomAR", "depth", e)
+        }
+    }
+
+    private var lastDepthTimestamp = 0L
+    private var rawDepthOk = true
+
+    /** @return true if a depth image was consumed (or was a duplicate). */
+    private fun accumulateDepth(frame: Frame, raw: Boolean): Boolean {
+        val img = if (raw) frame.acquireRawDepthImage16Bits() else frame.acquireDepthImage16Bits()
+        img.use { depth ->
+            // Depth updates slower than the camera: don't count the same depth frame twice.
+            if (depth.timestamp == lastDepthTimestamp) return true
+            lastDepthTimestamp = depth.timestamp
+            val conf = if (raw) frame.acquireRawDepthConfidenceImage() else null
+            try {
+                val plane = depth.planes[0]
                 val buf = plane.buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN)
                 val rowStride = plane.rowStride
                 val pxStride = plane.pixelStride
-                val w = img.width; val h = img.height
+                val cPlane = conf?.planes?.get(0)
+                val cBuf = cPlane?.buffer
+                val w = depth.width; val h = depth.height
                 val intr = frame.camera.textureIntrinsics
                 val dims = intr.imageDimensions
                 val f = intr.focalLength; val pp = intr.principalPoint
                 val sx = w.toFloat() / dims[0]; val sy = h.toFloat() / dims[1]
                 val fx = f[0] * sx; val fy = f[1] * sy; val cx = pp[0] * sx; val cy = pp[1] * sy
                 val pose = frame.camera.pose
+                val walls = wallPlanes()
                 val local = FloatArray(3)
                 val world = FloatArray(3)
+                val maxMm = if (raw) 3500 else 4500 // raw depth gets noisy with distance
+                val step = if (raw) 2 else 3
                 var v = 0
                 while (v < h) {
                     var u = 0
                     while (u < w) {
                         val mm = buf.getShort(v * rowStride + u * pxStride).toInt() and 0xFFFF
-                        if (mm in 300..4500) {
+                        val c = if (cBuf != null) (cBuf.get(v * cPlane.rowStride + u * cPlane.pixelStride).toInt() and 0xFF) else 255
+                        if (mm in 300..maxMm && c >= MIN_CONFIDENCE) {
                             val d = mm / 1000f
                             // Camera space: +X right, +Y up, -Z forward; image v grows downward.
                             local[0] = (u - cx) * d / fx
                             local[1] = -(v - cy) * d / fy
                             local[2] = -d
                             pose.transformPoint(local, 0, world, 0)
-                            accumulator.add(world[0], world[1], world[2], floorY)
+                            if (!onWall(world, walls)) accumulator.add(world[0], world[1], world[2], floorY)
                         }
-                        u += 3
+                        u += step
                     }
-                    v += 3
+                    v += step
                 }
+            } finally {
+                conf?.close()
             }
-        } catch (_: NotYetAvailableException) {
-        } catch (e: Exception) {
-            Log.w("OpenRoomAR", "depth", e)
         }
+        return true
+    }
+
+    private class WallPlane(val plane: Plane, val c: FloatArray, val n: FloatArray)
+
+    private fun wallPlanes(): List<WallPlane> {
+        val sess = session ?: return emptyList()
+        return sess.getAllTrackables(Plane::class.java)
+            .filter { it.trackingState == TrackingState.TRACKING && it.subsumedBy == null && it.type == Plane.Type.VERTICAL }
+            .map { p ->
+                val pose = p.centerPose
+                val n = FloatArray(3)
+                pose.getTransformedAxis(1, 1f, n, 0) // plane normal = local +Y
+                WallPlane(p, floatArrayOf(pose.tx(), pose.ty(), pose.tz()), n)
+            }
+    }
+
+    /** Points within 3 cm of a detected wall — inside its polygon, not the infinite plane — are wall, not furniture. */
+    private fun onWall(p: FloatArray, walls: List<WallPlane>): Boolean {
+        for (w in walls) {
+            val d = (p[0] - w.c[0]) * w.n[0] + (p[1] - w.c[1]) * w.n[1] + (p[2] - w.c[2]) * w.n[2]
+            if (kotlin.math.abs(d) < WALL_BAND && w.plane.isPoseInPolygon(com.google.ar.core.Pose.makeTranslation(p[0], p[1], p[2]))) return true
+        }
+        return false
+    }
+
+    private companion object {
+        /** Raw-depth confidence 0–255; the codelab keeps ≥ 0.3 (≈77). */
+        const val MIN_CONFIDENCE = 77
+        const val WALL_BAND = 0.03f
     }
 
     // ------------------------------------------------------------------ drawing

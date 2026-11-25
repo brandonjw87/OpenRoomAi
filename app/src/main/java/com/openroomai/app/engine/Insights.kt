@@ -66,6 +66,7 @@ object Insights {
             "Designers aim for under 35%. Removing or downsizing one item will help more than any rearrangement.", 6)
         out += Insight("🎨", "Light walls, one rug",
             "A single large rug that fits under the front legs of the seating unifies the zone; light walls and matching curtains to the ceiling add height.", 2)
+        out += DesignGuidelines.insights(room, layout)
         return out.sortedByDescending { it.impact }
     }
 }

@@ -12,6 +12,9 @@ import com.openroomai.app.engine.DeclutterCoach
 import com.openroomai.app.engine.DeclutterIdea
 import com.openroomai.app.engine.Effort
 import com.openroomai.app.engine.LayoutGoal
+import com.openroomai.app.engine.MirrorSpot
+import com.openroomai.app.engine.OpenLook
+import com.openroomai.app.model.Paint
 import com.openroomai.app.engine.Season
 import com.openroomai.app.engine.SunModel
 import com.openroomai.app.engine.SunReport
@@ -42,7 +45,11 @@ sealed interface Screen {
     data object Plan : Screen
     data object Preview : Screen
     data object ThreeD : Screen
+    data object Moving : Screen
 }
+
+/** Moving Day: pieces brought in from other rooms, placed by the optimizer. */
+data class ArrivalPlan(val itemIds: Set<String>, val result: OptimizeResult, val steps: List<MoveStep>)
 
 data class FitCheck(val item: Furniture, val result: OptimizeResult, val steps: List<MoveStep>)
 
@@ -102,7 +109,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun back(): Boolean = when (screen) {
         Screen.Home -> false
-        Screen.Preview, Screen.ThreeD -> { screen = Screen.Plan; true }
+        Screen.Preview, Screen.ThreeD, Screen.Moving -> { screen = Screen.Plan; true }
         else -> { screen = Screen.Home; refresh(); true }
     }
 
@@ -323,4 +330,75 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (file == null) toast = "Couldn't render the GIF. Try again?" else glowUpFile = file
         }
     }
+
+    // ------------------------------------------------------------ Open-Look Studio
+
+    var mirrorSpots by mutableStateOf<List<MirrorSpot>>(emptyList())
+        private set
+    private var openLookJob: Job? = null
+
+    fun refreshOpenLook(layout: List<Furniture>) {
+        val r = room ?: return
+        openLookJob?.cancel()
+        openLookJob = viewModelScope.launch {
+            delay(60)
+            mirrorSpots = withContext(Dispatchers.Default) { OpenLook.mirrorSpots(r, layout) }
+        }
+    }
+
+    /** Mirrors and paint change the look, not the layout: keep the current plan. */
+    fun addMirror(spot: MirrorSpot) {
+        update(invalidate = false) { it.copy(mirrors = it.mirrors + spot.mirror) }
+        toast = "Mirror pinned to Wall ${room?.wallLabel(spot.mirror.wallIndex)} 🪞 — check it in 3D"
+    }
+
+    fun removeMirror(id: String) = update(invalidate = false) { it.copy(mirrors = it.mirrors.filterNot { m -> m.id == id }) }
+    fun setPaint(p: Paint?) = update(invalidate = false) { it.copy(paint = p) }
+    fun setCeiling(h: Float) = update(invalidate = false) { it.copy(ceilingHeight = h.coerceIn(2.0f, 4.0f)) }
+
+    // ------------------------------------------------------------ Moving Day
+
+    var arrivalPlan by mutableStateOf<ArrivalPlan?>(null)
+        private set
+    var arrivalProgress by mutableStateOf<Float?>(null)
+        private set
+
+    /** Plan where furniture from other rooms should go here; nothing changes until accepted. */
+    fun planArrivals(items: List<Furniture>) {
+        val r = room ?: return
+        if (items.isEmpty() || arrivalProgress != null) return
+        arrivalProgress = 0f
+        arrivalPlan = null
+        viewModelScope.launch {
+            val center = Geo.centroid(r.outline)
+            val placed = items.map { it.copy(id = java.util.UUID.randomUUID().toString(), center = center, isNew = true, locked = false) }
+            val res = withContext(Dispatchers.Default) {
+                LayoutOptimizer(r, Effort.BALANCED, seed = System.nanoTime(), goal = r.goal)
+                    .optimize(start = r.furniture + placed, reference = r.furniture) { p -> arrivalProgress = p }
+            }
+            arrivalPlan = ArrivalPlan(placed.map { it.id }.toSet(), res, MovePlanner.plan(r, r.furniture, res.layout))
+            arrivalProgress = null
+        }
+    }
+
+    fun dismissArrivals() { arrivalPlan = null }
+
+    /** Keep the arrivals (copied — the source rooms stay untouched) and adopt the plan. */
+    fun acceptArrivals() {
+        val plan = arrivalPlan ?: return
+        val r = room ?: return
+        val arrived = plan.result.layout.filter { it.id in plan.itemIds }.map { it.copy(isNew = false) }
+        val withItems = r.copy(furniture = r.furniture + arrived, optimized = plan.result.layout.map { if (it.id in plan.itemIds) it.copy(isNew = false) else it })
+        room = withItems
+        persist(withItems)
+        result = plan.result.copy(layout = withItems.optimized!!)
+        steps = plan.steps
+        insights = Insights.explain(withItems, plan.result.before, plan.result.after, withItems.optimized!!)
+        doneSteps = emptySet()
+        arrivalPlan = null
+        reanalyze()
+        toast = "${arrived.size} piece(s) moved in 🚚 Your move-in plan is ready."
+    }
+
+    fun otherRooms(): List<Room> = rooms.value.filter { it.id != room?.id && it.furniture.isNotEmpty() }
 }

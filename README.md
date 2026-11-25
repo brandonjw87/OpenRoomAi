@@ -52,6 +52,43 @@ and a step-by-step plan for rearranging it so the room **feels as open as possib
   the score counting up, encoded by a built-in GIF encoder (median-cut palette, LZW), and opens
   the share sheet. ~1.4 MB, 72 frames, under a second to render on a laptop-class CPU.
 
+## v1.3: research-driven upgrade + Moving Day + Open-Look Studio
+
+### What the research changed
+- **Interior-design guideline terms** from furniture-layout research — conversation, visual
+  balance, alignment and emphasis (focal point), as in Merrell et al., *Interactive Furniture
+  Layout Using Interior Design Guidelines* (SIGGRAPH 2011), with the simulated-annealing approach
+  also used by Yu et al., *Make it Home* (2011). Implemented in `engine/DesignGuidelines.kt` as a
+  0–100 **design check** (demo room: 73 → 85 after optimizing). Measured finding: adding these
+  terms *inside* the anneal made both openness and design worse on the demo (bumpier cost
+  landscape), so they judge finished candidates and drive insights instead.
+- **AR scanning** follows Google's ARCore Raw Depth codelab (github.com/google-ar/codelab-raw-depth-api):
+  raw depth + per-pixel confidence (keep ≥ 0.3), shorter trusted range, duplicate-frame skip by
+  timestamp, and a 3 cm band filter around detected walls — using the plane polygon rather than
+  the infinite plane the sample used. Falls back to smoothed depth where raw depth isn't offered.
+- **Moving know-how** from furniture retailers' measuring guides: tilt pieces through doors using
+  their "diagonal depth", allow for door stops, and plan hallway corners.
+- **"Look bigger" tricks** from designers: mirror opposite the main light source, light paint,
+  avoid visually heavy pieces — turned into computable tools below.
+
+### 🚚 Moving Day
+Copy furniture from your other rooms into this one and let the optimizer place it (old rooms stay
+untouched). Every piece gets a delivery verdict: straight through, tilt it ("diagonal depth" from
+its real side profile, rotated in the door plane), door off its hinges, legs off, both, take it
+apart, or won't fit — plus a hallway-corner check using the corner-turn bound
+`L_max = min_θ a/cosθ + b/sinθ − t(tanθ + cotθ)`, sliding round, tilting up, or standing it on end.
+Ends with numbered labels and a shareable checklist for the movers.
+
+### 🪞 Open-Look Studio
+- **Mirror finder:** reflects your eye position across each candidate wall spot and traces what the
+  mirror would show from the doorway and the sofa; rewards seeing the window ("a second window"),
+  extra see-through depth, and facing the window to bounce daylight. Avoids doors, windows and
+  tall furniture; hangs above low pieces. Hung mirrors appear on the plan, in 3D and in the GIF.
+- **Paint:** palette with Light Reflectance Values (LRV) and a verdict per colour, previewed on the
+  3D walls.
+- **Design check:** conversation, visual balance (which wall it's heavy toward), alignment and
+  focal point, with before → after in the results.
+
 Also: sketch mode for phones without ARCore, demo room, lock pieces in place, 3 effort levels
 (Quick tidy / Balanced / Full redesign), before→after morph animation, progress checklist, and
 share the plan as an image + text checklist.

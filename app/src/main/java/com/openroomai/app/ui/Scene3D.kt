@@ -68,6 +68,8 @@ object Scene3D {
     val WallCol = Color(0xFFE7E9EE)
     val DoorCol = Color(0xFF8D6E63)
     val GlassCol = Color(0xFF9FD3F7)
+    val MirrorCol = Color(0xFFDCEAF5)
+    val MirrorGlint = Color(0xFFFFFFFF)
     const val WALL_H = 2.45f
 
     fun shade(c: Color, n: V3): Color {
@@ -130,12 +132,20 @@ object Scene3D {
             val stub = stubFor(i)
             val h = if (stub) 0.14f else WALL_H
             val quad = listOf(w.a.at(0f), w.b.at(0f), w.b.at(h), w.a.at(h))
-            (if (stub) stubs else full) += Face(quad, nn, WallCol)
+            (if (stub) stubs else full) += Face(quad, nn, room.paint?.let { Color(it.argb) } ?: WallCol)
             if (!stub) for (o in room.openings.filter { it.wallIndex == i }) {
                 val s = room.openingSegment(o)
                 val off = n * 0.012f
                 val (y0, y1, col) = if (o.type == OpeningType.DOOR) Triple(0f, 2.05f, DoorCol) else Triple(0.9f, 2.15f, GlassCol)
                 full += Face(listOf((s.a + off).at(y0), (s.b + off).at(y0), (s.b + off).at(y1), (s.a + off).at(y1)), nn, col)
+            }
+            // Mirrors: a silvery pane with a brighter glint stripe.
+            if (!stub) for (m in room.mirrors.filter { it.wallIndex == i }) {
+                val s = room.mirrorSegment(m)
+                val off = n * 0.015f
+                full += Face(listOf((s.a + off).at(m.bottom), (s.b + off).at(m.bottom), (s.b + off).at(m.top), (s.a + off).at(m.top)), nn, MirrorCol)
+                val g0 = s.pointAt(0.15f) + n * 0.017f; val g1 = s.pointAt(0.32f) + n * 0.017f
+                full += Face(listOf(g0.at(m.bottom + 0.1f), g1.at(m.bottom + 0.1f), g1.at(m.top - 0.1f), g0.at(m.top - 0.1f)), nn, MirrorGlint, edge = false)
             }
         }
         return full to stubs

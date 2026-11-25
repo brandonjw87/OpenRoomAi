@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoorFront
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -107,7 +108,7 @@ private enum class EditTool { SELECT, DOOR, WINDOW }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPreview: () -> Unit, onOpen3D: () -> Unit = {}) {
+fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPreview: () -> Unit, onOpen3D: () -> Unit = {}, onOpenMoving: () -> Unit = {}) {
     val room = vm.room ?: return
     val result = vm.result
     var showAfter by remember(room.id) { mutableStateOf(false) }
@@ -127,6 +128,10 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
         GlowUp.share(ctx, f, room, result?.before?.score ?: 0, result?.after?.score ?: 0)
     }
     val after = showAfter && result != null
+    var showMirrorSpots by remember { mutableStateOf(false) }
+    LaunchedEffect(room.outline, room.openings, room.mirrors, after, result) {
+        vm.refreshOpenLook(if (after && result != null) result.layout else room.furniture)
+    }
     LaunchedEffect(layers.sunlight, after, room, result, vm.sunSeason, vm.sunHour) {
         if (layers.sunlight) vm.refreshSun(if (after && result != null) result.layout else room.furniture)
     }
@@ -141,6 +146,7 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                 title = { Text(room.name, maxLines = 1, modifier = Modifier.clickable { renaming = true }) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
+                    IconButton(onClick = onOpenMoving) { Icon(Icons.Default.LocalShipping, "Moving Day") }
                     IconButton(onClick = { renaming = true }) { Icon(Icons.Default.Edit, "Rename") }
                     IconButton(onClick = {
                         scope.launch { sharePlan(ctx, room, layer.toImageBitmap(), vm.steps, result?.before?.score ?: vm.report?.score, result?.after?.score) }
@@ -183,6 +189,7 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                         modifier = Modifier.fillMaxSize(),
                         layers = layers,
                         sun = if (layers.sunlight && morph !in 0.01f..0.99f) vm.sunReport else null,
+                        mirrorSpots = if (showMirrorSpots) vm.mirrorSpots else emptyList(),
                         ghost = if (after) room.furniture else null,
                         selectedId = selected,
                         interactive = !after,
@@ -217,6 +224,9 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
         }
         if (layers.sunlight) item {
             SunCard(vm, room, layers.sunHours) { layers = layers.copy(sunHours = it) }
+        }
+        item {
+            OpenLookCard(vm, room, if (after && result != null) result.layout else room.furniture, showMirrorSpots, { showMirrorSpots = it }, onOpen3D)
         }
 
         // ---- Edit tools (current layout only)
@@ -283,12 +293,19 @@ fun PlanScreen(vm: AppViewModel, arSupported: Boolean?, onBack: () -> Unit, onPr
                     OutlinedButton(onClick = { catalog = true }, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.ShoppingCart, null); Spacer(Modifier.width(8.dp)); Text("Will it fit? Test a new purchase")
                     }
+                    OutlinedButton(onClick = onOpenMoving, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.LocalShipping, null); Spacer(Modifier.width(8.dp)); Text("Moving Day: bring furniture & door check")
+                    }
                 }
             }
         }
 
         if (result != null) {
-            item { Breakdown(result.before, result.after) }
+            item {
+                val dBefore = remember(room.furniture, room.openings) { com.openroomai.app.engine.DesignGuidelines.check(room, room.furniture).score }
+                val dAfter = remember(result.layout, room.openings) { com.openroomai.app.engine.DesignGuidelines.check(room, result.layout).score }
+                Breakdown(result.before, result.after, dBefore, dAfter)
+            }
             item {
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = onPreview, enabled = arSupported != false && vm.steps.isNotEmpty(), modifier = Modifier.weight(1f).height(52.dp)) {
@@ -444,7 +461,7 @@ private fun ScoreHeader(now: OpennessReport?, best: OpennessReport?, showingAfte
 }
 
 @Composable
-private fun Breakdown(before: OpennessReport, after: OpennessReport) {
+private fun Breakdown(before: OpennessReport, after: OpennessReport, designBefore: Int, designAfter: Int) {
     Card(Modifier.padding(16.dp).fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Palette.Surface), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("What changes", style = MaterialTheme.typography.titleMedium)
@@ -453,6 +470,7 @@ private fun Breakdown(before: OpennessReport, after: OpennessReport) {
             BarRow("Seen from the door", pct(before.visibilityPct), pct(after.visibilityPct), before.visibilityPct, after.visibilityPct)
             BarRow("Daylight unblocked", pct(before.lightPct), pct(after.lightPct), before.lightPct, after.lightPct)
             BarRow("Pieces you can reach", pct(before.accessPct), pct(after.accessPct), before.accessPct, after.accessPct)
+            BarRow("Design guidelines", "$designBefore", "$designAfter", designBefore / 100f, designAfter / 100f)
         }
     }
 }

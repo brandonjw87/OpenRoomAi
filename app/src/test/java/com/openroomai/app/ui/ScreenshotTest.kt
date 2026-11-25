@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.openroomai.app.data.RoomRepository
 import org.junit.Rule
 import org.junit.Test
@@ -116,5 +117,59 @@ class ScreenshotTest {
         rule.onNodeWithText("☀️ Sunlight").performClick()
         waitFor(60_000) { vm.sunReport != null }
         snap("plan_sunlight")
+    }
+
+    @Test
+    fun openLookStudioAndMirrorIn3D() {
+        val vm = AppViewModel(rule.activity.application)
+        rule.mainClock.autoAdvance = false
+        var show3d by androidx.compose.runtime.mutableStateOf(false)
+        rule.setContent {
+            OpenRoomTheme {
+                val r = vm.room
+                if (show3d && r != null) Room3DScreen(r, r.furniture, null, vm.report, null, {})
+                else PlanScreen(vm, true, {}, {})
+            }
+        }
+        vm.openDemo()
+        waitFor(30_000) { vm.report != null && vm.mirrorSpots.isNotEmpty() }
+        vm.addMirror(vm.mirrorSpots.first())
+        vm.setPaint(com.openroomai.app.engine.OpenLook.PAINTS[3])
+        waitFor(10_000) { vm.room?.mirrors?.isNotEmpty() == true }
+        rule.onNodeWithText("🪞 Open-Look Studio").performScrollTo()
+        snap("openlook_card")
+        show3d = true
+        snap("openlook_3d")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h3200dp-xxhdpi")
+    fun movingDay() {
+        val vm = AppViewModel(rule.activity.application)
+        rule.mainClock.autoAdvance = false
+        rule.setContent { OpenRoomTheme { if (vm.room != null) MovingScreen(vm) {} } }
+        vm.openDemo()
+        waitFor(10_000) { vm.room != null }
+        vm.createSketch("New flat", 4.2f, 3.6f)
+        vm.refresh()
+        waitFor(10_000) { vm.rooms.value.size >= 2 && vm.room?.name == "New flat" }
+        rule.onNodeWithText("All").performClick()
+        rule.onNodeWithText("Plan the move-in", substring = true).performClick()
+        waitFor(120_000) { vm.arrivalPlan != null }
+        snap("moving_day")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun mirrorAndPaintIn3D() {
+        val base = RoomRepository.demoRoom()
+        val spot = com.openroomai.app.engine.OpenLook.mirrorSpots(base, base.furniture).first()
+        val room = base.copy(mirrors = listOf(spot.mirror), paint = com.openroomai.app.engine.OpenLook.PAINTS[3])
+        var view by androidx.compose.runtime.mutableStateOf<Viewpoint>(Viewpoint.Door)
+        rule.mainClock.autoAdvance = false
+        rule.setContent { OpenRoomTheme { androidx.compose.runtime.key(view) { Room3DScreen(room, room.furniture, null, null, null, {}, initialView = view, initialYaw = 1.45f) } } }
+        snap("openlook_3d_door")
+        view = Viewpoint.Dollhouse
+        snap("openlook_3d_mirror")
     }
 }
