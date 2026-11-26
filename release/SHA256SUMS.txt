@@ -1,0 +1,2 @@
+db5b7cf74bed9d5b3b45380571c7700d30a46cc9569da16eff56fbcb699a9b82  OpenAreaAI-v2.0-pixel-arm64.apk
+79d7216d89183f34ac13edee305009b49c41ca2d59b61aece3db9c7290869dc9  OpenAreaAI-v2.0-universal.apk

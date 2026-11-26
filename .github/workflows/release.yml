@@ -1,0 +1,45 @@
+# Publishes the APKs in release/ as a GitHub Release.
+# Put the APKs, NOTES.md, VERSION (e.g. 2.0) and SOURCE_COMMIT (the commit they were built
+# from) in release/ and push; the release is tagged v<VERSION> at SOURCE_COMMIT.
+name: Publish release
+
+on:
+  push:
+    branches: [claude/sharp-cori-0l41lj]
+    paths: ['release/**', '.github/workflows/release.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(release/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "No APKs in release/: nothing to publish."
+            exit 0
+          fi
+          (cd release && sha256sum -c SHA256SUMS.txt)
+          tag="v$(tr -d '[:space:]' < release/VERSION)"
+          source="$(tr -d '[:space:]' < release/SOURCE_COMMIT)"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "${apks[@]}" release/SHA256SUMS.txt --clobber
+            gh release edit "$tag" --notes-file release/NOTES.md
+          else
+            gh release create "$tag" "${apks[@]}" release/SHA256SUMS.txt \
+              --target "$source" \
+              --title "Open Area AI $tag" \
+              --notes-file release/NOTES.md \
+              --latest
+          fi
+          gh release view "$tag" --json url,assets --jq '.url, (.assets[] | "\(.name)  \(.size) bytes")'

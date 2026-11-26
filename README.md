@@ -9,6 +9,14 @@ move, often just a few inches, to get the most open, flowing room your furniture
 > "Push the Sofa flush against Wall C (9½″) · +4.8 sq ft open floor"
 > "Rotate the Coffee table 90° · out of the door swing · walkway to the Armchair 13″ → 23″"
 
+## Download
+**[⬇️ Open Area AI 2.0 for Pixel and most phones (arm64, 8.2 MB)](https://github.com/brandonjw87/OpenRoomAi/releases/download/v2.0/OpenAreaAI-v2.0-pixel-arm64.apk)**
+· [Universal APK (14.8 MB)](https://github.com/brandonjw87/OpenRoomAi/releases/download/v2.0/OpenAreaAI-v2.0-universal.apk)
+· [All releases](https://github.com/brandonjw87/OpenRoomAi/releases)
+
+Open the link on your phone, tap the APK, and allow your browser to install apps if Android asks.
+Android 8.0+. AR scanning uses Google Play Services for AR; sketch mode works on any phone.
+
 ## What's new in 2.0
 
 ### 1. ⚡ Precision Micro-Nudge Engine (the "3-Inch Optimizer")
